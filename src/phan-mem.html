@@ -7964,9 +7964,10 @@ if (typeof module !== 'undefined') module.exports = XW;
   function hdForm(u, pid, h) {
     var isNew = !h, R = refDate(), r = HR.dnum(R), mat = HR.maternitySet(u.data, R), rank = cvRank(u);
     var ppl = u.data.NV.filter(function (e) { return HR.staffState(e, R, mat) !== 'left' || (h && e['Mã NV'] === h['Mã NV']); });
+    var id = h ? h['Mã NV'] : pid || '';
     /* 20/11/2026 (anh, 1.0.3): đứng ở Tổng các công ty → chọn được nhân sự của mọi công ty đang tích; chọn người nào thì mở lại form theo công ty của người đó */
     var allCo = isNew && isMulti(), pickHtml = allCo ? selUnits().map(function (uu) { var mt = HR.maternitySet(uu.data, R); return '<optgroup label="' + esc(shortUnit(uu.name)) + '">' + uu.data.NV.filter(function (e) { return HR.staffState(e, R, mt) !== 'left'; }).map(function (x) { return '<option value="' + esc(x['Mã NV']) + '" data-u="' + uu.id + '"' + (uu === u && x['Mã NV'] === pid ? ' selected' : '') + '>' + esc(x['Họ và tên'] + ' · ' + x['Mã NV'] + ' · ' + (x['Phòng ban'] || '')) + '</option>'; }).join('') + '</optgroup>'; }).join('') : ppl.map(function (x) { return opt(x['Mã NV'], x['Họ và tên'] + ' · ' + x['Mã NV'] + ' · ' + (x['Phòng ban'] || ''), id); }).join('');
-    var id = h ? h['Mã NV'] : pid || '', e = id ? nvIndex(u)[id] : null, by = HRR.contractsOf(u.data), list = id ? by[id] || [] : [], cur = HRR.currentContract(list, r);
+    var e = id ? nvIndex(u)[id] : null, by = HRR.contractsOf(u.data), list = id ? by[id] || [] : [], cur = HRR.currentContract(list, r);
     // gợi ý: loại theo lần ký tới, hiệu lực = ngày sau khi HĐ hiện tại hết hạn
     var sugT = '', sugStart = R;
     if (isNew && cur) { var ns = HRR.nextSign(list, cur); sugT = /Bắt buộc/.test(ns) ? 'HĐLĐ không xác định thời hạn' : HRR.isProb(cur['Loại hợp đồng']) ? 'HĐLĐ xác định thời hạn 12 tháng' : 'HĐLĐ xác định thời hạn 12 tháng'; if (cur['Ngày hết hạn']) sugStart = addDays(cur['Ngày hết hạn'], 1); }
