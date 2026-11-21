@@ -911,7 +911,7 @@ function api(path, body) {
 function hdr(sub, right) {
   return '<div class="top"><img src="/icon.svg" alt=""><div><div class="t1">Chấm công</div><div class="t2">' + esc(sub || '') + '</div></div><div class="sp"></div>' + (right || '') + '</div>';
 }
-function foot() { var br = window.QTT_BR || {}; return '<p class="faint small" style="text-align:center;margin-top:18px">' + (br.name ? esc(br.name) + ' · ' : '') + (window.QTT_BR ? 'bản ' : 'Quản trị tử tế · bản thử nghiệm ') + esc(VER) + (window.QTT_BR ? ' · Tác giả: <a href="https://quantritute.com" target="_blank" rel="noopener" style="color:inherit">Quản trị tử tế</a>' : '') + '</p>'; } // 16/11/2026: máy chủ của đơn vị có thương hiệu riêng + dòng tác giả
+function foot() { return '<p class="faint small" style="text-align:center;margin-top:18px">Bản quyền thuộc Vietcasa - Lưu hành nội bộ | Made by phuocnhtvietcasa</p>'; }
 /* ===== BẢN THỬ: thanh đầu trang + khung hướng dẫn từng bước ===== */
 var DEMO = false, HRM = '/phan-mem'; // 08/11: Phần mềm quản lý nhân sự toàn diện bản xem trước chạy cùng máy chủ thử
 function ls(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }

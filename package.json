@@ -1,10 +1,10 @@
 {
-  "name": "quan-ly-nhan-suu",
+  "name": "vietcasa-nhan-su",
   "version": "1.0.3",
   "private": true,
-  "description": "Phần mềm quản lý nhân sự – bản đầy đủ (Cloudflare Worker + D1) – Quản trị tử tế",
+  "description": "Phần mềm quản lý nhân sự VIETCASA (Cloudflare Worker + D1)",
+  "author": "VIETCASA",
   "license": "AGPL-3.0-only",
-  "homepage": "https://github.com/quantritute/quan-ly-nhan-su",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev"

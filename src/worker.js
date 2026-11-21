@@ -1,4 +1,4 @@
-/* Chấm công Wi-Fi – BẢN THỬ NGHIỆM (Quản trị tử tế)
+/* Chấm công Wi-Fi – VIETCASA
    Cloudflare Worker + D1. Một file máy chủ, giao diện trong app.html.
    - Nhân viên bấm Vào ca / Ra ca: máy chủ so IP của lượt bấm với IP văn phòng (Wi-Fi).
    - Màn hình chung (/tram): mỗi lần mở/làm mới báo IP văn phòng hiện tại + hiện QR động 30 giây (dự phòng).
@@ -632,7 +632,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS bc (cty TEXT PRIMARY KEY, du_lieu TEXT, at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS bc_gui (id TEXT NOT NULL, ky TEXT NOT NULL, cty TEXT, at INTEGER, n INTEGER, PRIMARY KEY (id, ky))`,
   `CREATE TABLE IF NOT EXISTS bc_nd (id TEXT PRIMARY KEY, cty TEXT, du_lieu TEXT, at INTEGER)`,
-  // 17/11/2026: CỔNG TUYỂN DỤNG CỦA CÔNG TY (cùng tên miền, /tuyen-dung/<tên rút gọn>) – chuyển từ máy chủ thử recruit.quantritute.com, không tự xóa sau 24 giờ
+  // 17/11/2026: CỔNG TUYỂN DỤNG CỦA CÔNG TY (cùng tên miền, /tuyen-dung/<tên rút gọn>), không tự xóa sau 24 giờ
   `CREATE TABLE IF NOT EXISTS td_cong (tok TEXT PRIMARY KEY, key_hash TEXT NOT NULL, slug TEXT, ten TEXT, html TEXT, jobs TEXT, tao INTEGER, cap_nhat INTEGER)`,
   `CREATE TABLE IF NOT EXISTS td_anh (tok TEXT PRIMARY KEY, v TEXT, at INTEGER)`, // 20/11/2026: ảnh khi chia sẻ link cổng tuyển dụng (JPEG base64)
   `CREATE TABLE IF NOT EXISTS td_ho_so (ma TEXT PRIMARY KEY, tok TEXT NOT NULL, job TEXT, du_lieu TEXT, cv_ten TEXT, cv_loai TEXT, cv_size INTEGER, cv_parts INTEGER DEFAULT 0, ip TEXT, tao INTEGER)`,
@@ -913,7 +913,7 @@ async function api(req, env, url) {
   const p = url.pathname, now = Date.now(), ip = clientIP(req, env);
   /* ----- 17/11: CỔNG TUYỂN DỤNG CỦA CÔNG TY – ứng viên nộp (công khai), phần mềm đưa trang lên / lấy hồ sơ (cần đăng nhập Phần mềm quản lý nhân sự toàn diện trên máy chủ này) ----- */
   if (p === '/api/ung-tuyen' || p === '/api/cong' || p.startsWith('/api/cong/')) { // đọc thân yêu cầu riêng (multipart / JSON) nên đặt trước phần đọc body chung
-    if (isDemo(env, url)) return json({ ok: false, msg: 'Bản thử dùng cổng thử recruit.quantritute.com.' }, 404);
+    if (isDemo(env, url)) return json({ ok: false, msg: 'Cổng tuyển dụng không khả dụng trên bản thử.' }, 404);
   if (p === '/api/ung-tuyen' && req.method === 'POST') return tdNop(db, req);
   if (p === '/api/cong' || p.startsWith('/api/cong/')) { const U = await qtUser(db, req); if (!U) return json({ ok: false, msg: 'Phiên đăng nhập đã hết – đăng nhập lại Phần mềm quản lý nhân sự toàn diện.', loi: 'Phiên đăng nhập đã hết.' }, 401); return tdCongApi(db, req, url, p); }
   }
@@ -1912,10 +1912,10 @@ export default {
       // 08/11: thẻ chia sẻ (tiêu đề + ảnh) khi dán link bản chạy thử lên Facebook/Zalo – chỉ ở bản thử, máy chủ của công ty không có
       if (isDemo(env, url) && (route === 'ql' || route === 'nv')) {
         const og = route === 'ql'
-          ? { t: 'Trang quản lý chấm công – bản chạy thử', d: 'Thiết lập mạng Wi‑Fi văn phòng, xem lượt chấm của nhân viên. Dữ liệu mẫu, dùng thử miễn phí – Quản trị tử tế.', i: '/og-ql.jpg', u: '/quan-ly' }
-          : { t: 'App cho nhân viên – bản chạy thử', d: 'Chấm công, xem công từng ngày, gửi đơn nghỉ cho quản lý duyệt, xem lương cả năm, hồ sơ của mình – ngay trên điện thoại. Dữ liệu mẫu, dùng thử miễn phí – Quản trị tử tế.', i: '/og-nv.jpg?v=0511', u: '/' };
+          ? { t: 'Trang quản lý chấm công – bản chạy thử', d: 'Thiết lập mạng Wi‑Fi văn phòng, xem lượt chấm của nhân viên. Dữ liệu mẫu, dùng thử miễn phí – VIETCASA.', i: '/og-ql.jpg', u: '/quan-ly' }
+          : { t: 'App cho nhân viên – bản chạy thử', d: 'Chấm công, xem công từng ngày, gửi đơn nghỉ cho quản lý duyệt, xem lương cả năm, hồ sơ của mình – ngay trên điện thoại. Dữ liệu mẫu, dùng thử miễn phí – VIETCASA.', i: '/og-nv.jpg?v=0511', u: '/' };
         const o = url.origin;
-        html = html.replace('<title>Chấm công</title>', '<title>' + og.t + '</title>\n<meta name="description" content="' + og.d + '">\n<meta property="og:type" content="website">\n<meta property="og:site_name" content="Quản trị tử tế">\n<meta property="og:title" content="' + og.t + '">\n<meta property="og:description" content="' + og.d + '">\n<meta property="og:url" content="' + o + og.u + '">\n<meta property="og:image" content="' + o + og.i + '?v=0811">\n<meta property="og:image:width" content="1200">\n<meta property="og:image:height" content="630">\n<meta property="og:locale" content="vi_VN">\n<meta name="twitter:card" content="summary_large_image">');
+        html = html.replace('<title>Chấm công</title>', '<title>' + og.t + '</title>\n<meta name="description" content="' + og.d + '">\n<meta property="og:type" content="website">\n<meta property="og:site_name" content="VIETCASA">\n<meta property="og:title" content="' + og.t + '">\n<meta property="og:description" content="' + og.d + '">\n<meta property="og:url" content="' + o + og.u + '">\n<meta property="og:image" content="' + o + og.i + '?v=0811">\n<meta property="og:image:width" content="1200">\n<meta property="og:image:height" content="630">\n<meta property="og:locale" content="vi_VN">\n<meta name="twitter:card" content="summary_large_image">');
       }
       return withMay(new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...SEC } }));
     } catch (e) {

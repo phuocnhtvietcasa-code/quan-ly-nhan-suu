@@ -2,7 +2,7 @@
 setlocal
 chcp 65001 >nul
 rem ============================================================
-rem  CAI DAT Phan mem quan ly nhan su - BAN DAY DU len Cloudflare
+rem  VIETCASA - Cai dat phan mem quan ly nhan su len Cloudflare
 rem  Can: Node.js ban LTS (https://nodejs.org), tai khoan Cloudflare
 rem  Cach dung: bam dup file nay (hoac go .\cai-dat.cmd trong PowerShell)
 rem ============================================================
@@ -31,6 +31,6 @@ pause
 exit /b 0
 :err
 echo.
-echo [Loi] Cai dat dung giua chung. Chup man hinh nay gui nguoi ho tro.
+echo [Loi] Cai dat dung giua chung. Lien he bo phan CNTT VIETCASA.
 pause
 exit /b 1

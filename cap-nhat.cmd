@@ -2,7 +2,7 @@
 setlocal
 chcp 65001 >nul
 rem ============================================================
-rem  CAP NHAT Phan mem quan ly nhan su - ban day du (du lieu giu nguyen)
+rem  VIETCASA - Cap nhat phan mem quan ly nhan su (du lieu giu nguyen)
 rem  Truoc khi chay: tai ban sao luu trong phan mem (Cai dat - Du lieu va sao luu)
 rem ============================================================
 cd /d "%~dp0"
@@ -18,6 +18,6 @@ echo XONG. Mo lai trang quan tri, bam Ctrl+F5.
 pause
 exit /b 0
 :err
-echo [Loi] Cap nhat dung giua chung. Du lieu tren may chu khong bi anh huong. Chup man hinh gui nguoi ho tro.
+echo [Loi] Cap nhat dung giua chung. Du lieu tren may chu khong bi anh huong. Lien he bo phan CNTT VIETCASA.
 pause
 exit /b 1
