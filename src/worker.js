@@ -131,8 +131,8 @@ function nguoiDuyet(by, ma) {
 }
 function duocDuyet(by, me, d) { return d.ma !== me && (d.duyet_ma === me || nguoiDuyet(by, d.ma).includes(me)); }
 async function donChoDuyet(db, by, me) {
-  const pend = (await db.prepare("SELECT d.so, d.ma, n.ten, n.pb, d.loai, d.tu, d.den, d.so_ngay, d.ly_do, d.ban_giao, d.tao, d.duyet_ma FROM don d LEFT JOIN nv n ON n.ma = d.ma WHERE d.trang_thai = 'Chờ duyệt' AND d.ma != ? ORDER BY d.tu LIMIT 400").bind(me).all()).results;
-  return pend.filter(d => duocDuyet(by, me, d)).slice(0, 40).map(d => { const cung = nguoiDuyet(by, d.ma).filter(x => x !== me).map(x => by[x].ten); const { duyet_ma, ...o } = d; return { ...o, cung }; });
+  const pend = (await db.prepare("SELECT d.so, d.ma, n.ten, n.pb, d.loai, d.tu, d.den, d.so_ngay, d.ly_do, d.ban_giao, d.tao, d.trang_thai, d.nguoi_duyet, d.ngay_duyet, d.ly_do_tc, d.duyet_ma FROM don d LEFT JOIN nv n ON n.ma = d.ma WHERE d.trang_thai = 'Chờ duyệt' AND d.ma != ? ORDER BY d.tu LIMIT 400").bind(me).all()).results;
+  return pend.filter(d => duocDuyet(by, me, d)).slice(0, 40).map(d => { const cung = nguoiDuyet(by, d.ma).filter(x => x !== me).map(x => by[x].ten); const { duyet_ma, ...o } = d; return { ...o, ...requestText(d.ly_do), cung }; });
 }
 /* ===== 16/11/2026 – ĐƠN XIN ĐI MUỘN / VỀ SỚM (góp ý người dùng, anh Tuấn chốt: đơn vị tự bật/tắt và tự đặt quy tắc) =====
    Cấu hình của đơn vị đi kèm hồ sơ mỗi người (ho_so.du_lieu.xm), do Phần mềm quản lý nhân sự toàn diện gửi lên:
@@ -160,8 +160,8 @@ async function caNgay(db, cfg, HS, ma, ngay) {
   return { vao: ng ? ng.vao : ca.vao, ra: ng ? ng.ra : ca.ra, som };
 }
 async function xmChoDuyet(db, by, me) {
-  const pend = (await db.prepare("SELECT x.so, x.ma, n.ten, n.pb, x.ngay, x.kieu, x.gio, x.phut, x.ly_do, x.tao, x.duyet_ma FROM xin_muon x LEFT JOIN nv n ON n.ma = x.ma WHERE x.trang_thai = 'Chờ duyệt' AND x.ma != ? ORDER BY x.ngay LIMIT 400").bind(me).all()).results;
-  return pend.filter(d => duocDuyet(by, me, d)).slice(0, 40).map(d => { const cung = nguoiDuyet(by, d.ma).filter(x => x !== me).map(x => by[x].ten); const { duyet_ma, ...o } = d; return { ...o, xm: 1, loai: d.kieu === 'som' ? 'Xin về sớm' : 'Xin đi muộn', tu: d.ngay, den: d.ngay, cung }; });
+  const pend = (await db.prepare("SELECT x.so, x.ma, n.ten, n.pb, x.ngay, x.kieu, x.gio, x.phut, x.ly_do, x.tao, x.trang_thai, x.nguoi_duyet, x.ngay_duyet, x.ly_do_tc, x.duyet_ma FROM xin_muon x LEFT JOIN nv n ON n.ma = x.ma WHERE x.trang_thai = 'Chờ duyệt' AND x.ma != ? ORDER BY x.ngay LIMIT 400").bind(me).all()).results;
+  return pend.filter(d => duocDuyet(by, me, d)).slice(0, 40).map(d => { const cung = nguoiDuyet(by, d.ma).filter(x => x !== me).map(x => by[x].ten); const { duyet_ma, ...o } = d; return { ...o, ...requestText(d.ly_do), xm: 1, loai: xmTypeName(d.kieu), tu: d.ngay, den: d.ngay, cung }; });
 }
 
 /* ===== 16/11/2026 – THÔNG BÁO ĐẨY (Web Push, chuẩn RFC 8030 / 8291 / 8292) =====
@@ -220,6 +220,38 @@ const VB_PART = 700000, VB_MAX = 10 * 1024 * 1024;
 function tbDen(r) { try { return JSON.parse(r.den || '{}') || {}; } catch (e) { return {}; } }
 function tbHop(r, me, H) { const d = tbDen(r); if (r.cty && H.cty && r.cty !== H.cty) return false; return d.all ? true : Array.isArray(d.ma) && d.ma.length ? d.ma.includes(me) : Array.isArray(d.pb) && d.pb.length ? d.pb.includes(H.pb || '') : false; }
 async function tbNguoiNhan(db, demo, r) { const BY = await hsLite(db, demo); return Object.keys(BY).filter(ma => tbHop(r, ma, BY[ma])); }
+// Giữ nguyên lược đồ D1: metadata buổi nghỉ và ảnh được gói cùng lý do trong cột ly_do.
+const REQ_META_PREFIX = '\u001fREQ1:';
+function requestText(raw) {
+  const s = String(raw || '');
+  if (s.indexOf(REQ_META_PREFIX) !== 0) return { ly_do: s, buoi: '', anh: [] };
+  try { const x = JSON.parse(s.slice(REQ_META_PREFIX.length)); return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [] }; }
+  catch (e) { return { ly_do: s, buoi: '', anh: [] }; }
+}
+function requestPhotos(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.length > 5) return null;
+  const out = [];
+  for (const x of value) { const v = String(x || ''); if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(v) || v.length > 600000) return null; out.push(v); }
+  return out;
+}
+function requestTextPack(reason, buoi, photos) {
+  const a = requestPhotos(photos); if (!a) return null;
+  const r = String(reason || '').trim().slice(0, 300), b = ['sang', 'chieu'].includes(String(buoi || '')) ? String(buoi) : '';
+  if (!b && !a.length) return r;
+  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a }); return packed.length <= 1700000 ? packed : null;
+}
+function xmTypeName(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều' })[k] || 'Đơn đi muộn, về sớm, công tác'; }
+async function requestNotice(db, cfg, origin, demo, recipients, title, content, so, req, now) {
+  const ids = [...new Set((recipients || []).filter(Boolean).map(String))]; if (!ids.length) return;
+  const BY = await hsLite(db, demo), groups = new Map();
+  ids.forEach(ma => { const h = BY[ma]; if (!h) return; const cty = String(h.cty || ''); if (!groups.has(cty)) groups.set(cty, []); groups.get(cty).push(ma); });
+  await Promise.all([...groups.entries()].map(async ([cty, mas]) => {
+    const id = 'tbreq' + now.toString(36) + randHex(4), den = JSON.stringify({ ma: mas });
+    await db.prepare('INSERT INTO tb (id, cty, tieu_de, noi_dung, popup, den, loai, ref, nguoi, n, at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING').bind(id, cty, String(title || '').slice(0, 200), String(content || '').slice(0, 6000), den, 'don', String(so || '').slice(0, 80), 'Chấm công', mas.length, now).run();
+    await pushTo(db, cfg, origin, mas, { t: title, b: String(content || '').replace(/\s+/g, ' ').slice(0, 140), u: '/?tab=don', tag: String(so || id) });
+  }));
+}
 // dùng chung cho /api/sync/* (bản công ty) và /api/demo/* (bản thử, chỉ công ty mẫu)
 async function vbTbApi(r, db, cfg, body, url, req, now, demo, jc, ctyOk) {
   if (r === 'vb' && req.method === 'POST') {
@@ -422,12 +454,12 @@ async function bcBuild(db, cfg, demo, B, def, pbs, now) {
   }
   if (ct.has('cc_nghi')) { muc.push({ id: 'cc_nghi', t: 'Nghỉ có đơn', kpi: [['Lượt nghỉ', C.nghiL.length]], bang: { cot: ['Họ và tên', 'Phòng ban', 'Loại nghỉ', K.mot ? 'Đơn từ – đến' : 'Ngày'], dong: C.nghiL.map(x => [x.ten, x.pb, x.loai, K.mot ? bcVn(x.tu) + (x.den !== x.tu ? ' – ' + bcVn(x.den) : '') : bcVn(x.ngay)]) }, trong: 'Không ai nghỉ.' }); if (C.nghiL.length) tt.push(C.nghiL.length + ' nghỉ có đơn'); }
   if (ct.has('cc_xm')) { const all = C.muon.concat(C.som), n = all.length || 1, c = k => all.filter(x => x.st === k).length, pc = k => Math.round(c(k) * 1000 / n) / 10 + '%';
-    muc.push({ id: 'cc_xm', t: 'Đi muộn, về sớm theo đơn', kpi: [['Được duyệt', pc('duyet'), 'ok'], ['Không duyệt', pc('tuchoi'), 'bad'], ['Không xin phép', pc('khong'), 'warn'], ['Chờ duyệt', pc('cho')]], bang: { cot: ['Phòng ban', 'Tổng lượt', 'Được duyệt', 'Không duyệt', 'Không xin phép', 'Chờ duyệt'], dong: Object.keys(C.pb).map(k => { const z = all.filter(x => (x.pb || '(Chưa có phòng ban)') === k), f = s => z.filter(x => x.st === s).length; return [k, z.length, f('duyet'), f('tuchoi'), f('khong'), f('cho')]; }).filter(r => r[1]) }, trong: 'Không có lượt đi muộn, về sớm.' }); }
+    muc.push({ id: 'cc_xm', t: 'Đi muộn, về sớm, công tác theo đơn', kpi: [['Được duyệt', pc('duyet'), 'ok'], ['Không duyệt', pc('tuchoi'), 'bad'], ['Không xin phép', pc('khong'), 'warn'], ['Chờ duyệt', pc('cho')]], bang: { cot: ['Phòng ban', 'Tổng lượt', 'Được duyệt', 'Không duyệt', 'Không xin phép', 'Chờ duyệt'], dong: Object.keys(C.pb).map(k => { const z = all.filter(x => (x.pb || '(Chưa có phòng ban)') === k), f = s => z.filter(x => x.st === s).length; return [k, z.length, f('duyet'), f('tuchoi'), f('khong'), f('cho')]; }).filter(r => r[1]) }, trong: 'Không có lượt đi muộn, về sớm, công tác.' }); }
   if (ct.has('don_cho')) {
     const d1 = (await db.prepare("SELECT d.ma, d.loai, d.tu, d.den, d.tao FROM don d WHERE d.trang_thai = 'Chờ duyệt' ORDER BY d.tao").all()).results.filter(x => inS.has(x.ma));
     const d2 = (await db.prepare("SELECT ma, kieu, ngay, tao FROM xin_muon WHERE trang_thai = 'Chờ duyệt' ORDER BY tao").all()).results.filter(x => inS.has(x.ma)), nm = {}; staff.forEach(s => { nm[s.ma] = s; });
     const L = d1.map(x => [nm[x.ma].ten, nm[x.ma].pb, x.loai || 'Nghỉ', bcVn(x.tu) + (x.den && x.den !== x.tu ? ' – ' + bcVn(x.den) : ''), x.tao]).concat(d2.map(x => [nm[x.ma].ten, nm[x.ma].pb, x.kieu === 'som' ? 'Xin về sớm' : 'Xin đi muộn', bcVn(x.ngay), x.tao])).sort((a, b) => a[4] - b[4]);
-    muc.push({ id: 'don_cho', t: 'Đơn chờ duyệt', kpi: [['Đơn nghỉ', d1.length, d1.length ? 'warn' : 'ok'], ['Đơn đi muộn, về sớm', d2.length, d2.length ? 'warn' : 'ok']], bang: { cot: ['Họ và tên', 'Phòng ban', 'Loại đơn', 'Ngày', 'Gửi lúc'], dong: L.map(r => [r[0], r[1], r[2], r[3], (() => { const q = vnParts(r[4]); return q.d + '/' + q.m + ' ' + q.h + ':' + q.mi; })()]) }, trong: 'Không có đơn chờ duyệt.' });
+    muc.push({ id: 'don_cho', t: 'Đơn chờ duyệt', kpi: [['Đơn nghỉ', d1.length, d1.length ? 'warn' : 'ok'], ['Đơn đi muộn, về sớm, công tác', d2.length, d2.length ? 'warn' : 'ok']], bang: { cot: ['Họ và tên', 'Phòng ban', 'Loại đơn', 'Ngày', 'Gửi lúc'], dong: L.map(r => [r[0], r[1], r[2], r[3], (() => { const q = vnParts(r[4]); return q.d + '/' + q.m + ' ' + q.h + ':' + q.mi; })()]) }, trong: 'Không có đơn chờ duyệt.' });
     if (L.length) tt.push(L.length + ' đơn chờ duyệt');
   }
   if (ct.has('ns_bd')) {
@@ -937,23 +969,55 @@ async function api(req, env, url) {
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
       return jc({ ok: true, now, list: (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '' })) });
     }
-    if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' AND trang_thai != 'Đã hủy' ORDER BY tao DESC LIMIT 200").all()).results });
-    if (r === 'don-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [];
-      for (const x of list) { if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue; st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay) || null, now, String(x.so))); }
+    if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' AND trang_thai != 'Đã hủy' ORDER BY tao DESC LIMIT 200").all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
+    if (r === 'cong' && req.method === 'POST') {
+      const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
+      const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [];
+      for (const x of list) { const ma = String(x.ma || '').toUpperCase(), e = demoFind(ma); if (!e) continue; const dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000), old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first(); if (old && old.du_lieu === dl) continue;
+        st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80))); }
       if (st.length) await db.batch(st); return jc({ ok: true, n: st.length });
     }
-    if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE trang_thai != \'Đã hủy\' ORDER BY tao DESC LIMIT 300').all()).results.filter(x => demoFind(x.ma)) }); // 16/11
+    if (r === 'don-cap-nhat' && req.method === 'POST') {
+      const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [];
+      const notices = [];
+      for (const x of list) {
+        const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o || !demoFind(o.ma)) continue;
+        if (x.xoa) { st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
+        if (x.sua) {
+          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
+          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
+          const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
+          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh); if (packed == null) continue;
+          const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
+          st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
+        }
+        if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
+        st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay) || null, now, so));
+        if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') notices.push({ ma: o.ma, so, t: 'Đơn ' + o.loai + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.tu.slice(8) + '/' + o.tu.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
+      }
+      if (st.length) await db.batch(st);
+      if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, true, [n.ma], n.t, n.b, n.so, req, now))));
+      return jc({ ok: true, n: st.length });
+    }
+    if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE trang_thai != \'Đã hủy\' ORDER BY tao DESC LIMIT 300').all()).results.filter(x => demoFind(x.ma)).map(x => ({ ...x, ...requestText(x.ly_do) })) }); // 16/11
     if (r === 'xm-cap-nhat' && req.method === 'POST') {
       const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [];
       for (const x of list) {
+        const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o || !demoFind(o.ma)) continue;
+        if (x.xoa) { st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
+        if (x.sua) {
+          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh);
+          const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
+          st.push(db.prepare('UPDATE xin_muon SET ngay = ?, kieu = ?, gio = ?, phut = ?, ly_do = ?, cap_nhat = ? WHERE so = ?').bind(ngay, kieu, gio || null, x.phut == null ? o.phut : Number(x.phut) || null, ly, now, so)); continue;
+        }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
-        const o = await db.prepare('SELECT ma, ngay, kieu, trang_thai FROM xin_muon WHERE so = ?').bind(String(x.so)).first(); if (!o || !demoFind(o.ma)) continue;
-        st.push(db.prepare('UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), now, String(x.so)));
-        if (o.trang_thai !== x.trang_thai && x.trang_thai !== 'Chờ duyệt') bao.push({ ma: o.ma, m: { t: 'Đơn xin ' + (o.kieu === 'muon' ? 'đi muộn' : 'về sớm') + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.ngay.slice(8) + '/' + o.ngay.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : ''), u: '/?tab=don', tag: String(x.so) } });
+        st.push(db.prepare('UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), now, so));
+        if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') bao.push({ ma: o.ma, so, t: 'Đơn ' + xmTypeName(o.kieu) + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.ngay.slice(8) + '/' + o.ngay.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
-      if (bao.length) later(req, Promise.all(bao.map(b => pushTo(db, cfg, url.origin, [b.ma], b.m))));
+      if (bao.length) later(req, Promise.all(bao.map(b => requestNotice(db, cfg, url.origin, true, [b.ma], b.t, b.b, b.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
     { const vt = await vbTbApi(r, db, cfg, body, url, req, now, true, jc, c => DEMO.cty.some(x => x.ten === c)); if (vt) return vt; } // 16/11: bản thử – chỉ công ty mẫu
@@ -1074,26 +1138,46 @@ async function api(req, env, url) {
     }
     { const vt = await vbTbApi(r, db, cfg, body, url, req, now, false, jc, c => !!c); if (vt) return vt; } // 16/11: kho thông tin chung + thông báo
     { const vt = await bcApi(r, db, cfg, body, url, req, now, false, jc, c => !!c); if (vt) return vt; } // 16/11 13:29: gửi báo cáo định kỳ
-    if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE ngay >= ? ORDER BY tao').bind(String(url.searchParams.get('tu') || '2000-01-01')).all()).results }); // 16/11
+    if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE ngay >= ? ORDER BY tao').bind(String(url.searchParams.get('tu') || '2000-01-01')).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) }); // 16/11
     if (r === 'xm-cap-nhat' && req.method === 'POST') {
       const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [];
       for (const x of list) {
+        const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o) continue;
+        if (x.xoa) { st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
+        if (x.sua) {
+          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh);
+          const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
+          st.push(db.prepare('UPDATE xin_muon SET ngay = ?, kieu = ?, gio = ?, phut = ?, ly_do = ?, cap_nhat = ? WHERE so = ?').bind(ngay, kieu, gio || null, x.phut == null ? o.phut : Number(x.phut) || null, ly, now, so)); continue;
+        }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
-        const o = await db.prepare('SELECT ma, ngay, kieu, trang_thai FROM xin_muon WHERE so = ?').bind(String(x.so)).first(); if (!o) continue;
-        st.push(db.prepare('UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), now, String(x.so)));
-        if (o.trang_thai !== x.trang_thai && x.trang_thai !== 'Chờ duyệt') bao.push({ ma: o.ma, m: { t: 'Đơn xin ' + (o.kieu === 'muon' ? 'đi muộn' : 'về sớm') + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.ngay.slice(8) + '/' + o.ngay.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : ''), u: '/?tab=don', tag: String(x.so) } });
+        st.push(db.prepare('UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), now, so));
+        if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') bao.push({ ma: o.ma, so, t: 'Đơn ' + xmTypeName(o.kieu) + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.ngay.slice(8) + '/' + o.ngay.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
-      if (bao.length) later(req, Promise.all(bao.map(b => pushTo(db, cfg, url.origin, [b.ma], b.m))));
+      if (bao.length) later(req, Promise.all(bao.map(b => requestNotice(db, cfg, url.origin, false, [b.ma], b.t, b.b, b.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [];
       for (const x of list) {
+        const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o) continue;
+        if (x.xoa) { st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
+        if (x.sua) {
+          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
+          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
+          const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
+          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh); if (packed == null) continue;
+          const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
+          st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
+        }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
-        st.push(db.prepare('UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay), now, String(x.so)));
+        st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay), now, so));
+        if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') notices.push({ ma: o.ma, so, t: 'Đơn ' + o.loai + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: String(o.tu || '').slice(8) + '/' + String(o.tu || '').slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, false, [n.ma], n.t, n.b, n.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
     if (r === 'cong' && req.method === 'POST') {
@@ -1331,34 +1415,45 @@ async function api(req, env, url) {
   /* ----- 16/11/2026: đơn xin đi muộn / về sớm ----- */
   if (p === '/api/xin-muon' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
-    if (body.huy) { const r = await db.prepare("UPDATE xin_muon SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt'").bind(now, String(body.huy), s.nv.ma).run(); return r.meta.changes ? json({ ok: true }) : bad('Chỉ hủy được đơn đang chờ duyệt.'); }
-    const HS = await hsOf(db, s.nv.ma, demo), X = xmCfgOf(HS, demo); if (!X.on) return bad('Công ty chưa dùng đơn xin đi muộn, về sớm.');
-    const kieu = body.kieu === 'som' ? 'som' : body.kieu === 'muon' ? 'muon' : null, ngay = String(body.ngay || ''), gio = String(body.gio || ''), ly = String(body.ly_do || '').trim().slice(0, 300);
-    if (!kieu) return bad('Chọn đi muộn hay về sớm.');
+    if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
+    if (body.so && body.tai_anh) {
+      const x = await db.prepare('SELECT so, kieu, trang_thai, ly_do FROM xin_muon WHERE so = ? AND ma = ?').bind(String(body.so), s.nv.ma).first();
+      if (!x || !['cong_sang', 'cong_chieu'].includes(x.kieu) || x.trang_thai !== 'Đã duyệt') return bad('Chỉ thêm ảnh cho đơn công tác đã duyệt của chính bạn.');
+      const old = requestText(x.ly_do), add = requestPhotos(body.anh); if (!add || !add.length || old.anh.length + add.length > 5) return bad('Chọn tối đa 5 ảnh JPEG đã nén cho mỗi đơn.');
+      const packed = requestTextPack(old.ly_do, '', old.anh.concat(add)); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh, mỗi ảnh không quá 600 KB.');
+      await db.prepare('UPDATE xin_muon SET ly_do = ?, cap_nhat = ? WHERE so = ? AND ma = ?').bind(packed, now, x.so, s.nv.ma).run(); return json({ ok: true });
+    }
+    const HS = await hsOf(db, s.nv.ma, demo), X = xmCfgOf(HS, demo); if (!X.on) return bad('Công ty chưa dùng đơn đi muộn, về sớm, công tác.');
+    const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(body.kieu || '')) ? String(body.kieu) : null, isTrip = kieu === 'cong_sang' || kieu === 'cong_chieu', ngay = String(body.ngay || ''), gio = String(body.gio || ''), ly = String(body.ly_do || '').trim().slice(0, 300), anh = requestPhotos(body.anh);
+    if (!kieu) return bad('Chọn đi muộn, về sớm, công tác hoặc công tác.');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay)) return bad('Chọn ngày.');
-    if (!/^\d{2}:\d{2}$/.test(gio) || hm2min(gio) === null || hm2min(gio) >= 1440) return bad(kieu === 'muon' ? 'Nhập giờ dự kiến đến (dạng 08:45).' : 'Nhập giờ dự kiến về (dạng 16:30).');
+    if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
+    if (!isTrip && (!/^\d{2}:\d{2}$/.test(gio) || hm2min(gio) === null || hm2min(gio) >= 1440)) return bad(kieu === 'muon' ? 'Nhập giờ dự kiến đến (dạng 08:45).' : 'Nhập giờ dự kiến về (dạng 16:30).');
     if (!ly) return bad('Ghi lý do để người duyệt nắm.');
     const today = isoVN(now), nowM = hm2min(vnHM(now));
     if (ngay > addDaysIso(today, 60)) return bad('Chỉ gửi trước tối đa 60 ngày.');
     const ca = await caNgay(db, cfg, HS, s.nv.ma, ngay);
     if (!ca && HS && HS.lich) return bad('Ngày ' + ngay.slice(8) + '/' + ngay.slice(5, 7) + ' không có ca làm của bạn.');
     let phut = null;
-    if (ca) { const vao = hm2min(ca.vao) - (ca.som || 0), ra = hm2min(ca.ra), g = hm2min(gio), ra2 = ra <= hm2min(ca.vao) ? ra + 1440 : ra;
+    if (ca && !isTrip) { const vao = hm2min(ca.vao) - (ca.som || 0), ra = hm2min(ca.ra), g = hm2min(gio), ra2 = ra <= hm2min(ca.vao) ? ra + 1440 : ra;
       if (kieu === 'muon') { if (g <= vao) return bad('Giờ dự kiến đến phải sau ' + (ca.som ? 'giờ phải có mặt ' : 'giờ vào ca ') + String(Math.floor(vao / 60)).padStart(2, '0') + ':' + String(vao % 60).padStart(2, '0') + '.'); phut = g - vao; }
       else { const g2 = g < hm2min(ca.vao) && ra2 > 1440 ? g + 1440 : g; if (g2 >= ra2) return bad('Giờ dự kiến về phải trước giờ ra ca ' + ca.ra + '.'); phut = ra2 - g2; } }
     // hạn gửi theo quy định của đơn vị
     const moc = kieu === 'muon' ? (ca ? hm2min(ca.vao) - (ca.som || 0) : hm2min(gio)) : hm2min(gio);
-    if (X.han === 'truoc') { // 16/11 11:02 anh: xin trước tối thiểu X.tp phút (so với giờ vào ca / giờ xin về)
+    if (!isTrip && X.han === 'truoc') { // 16/11 11:02 anh: xin trước tối thiểu X.tp phút (so với giờ vào ca / giờ xin về)
       const mocT = Date.UTC(+ngay.slice(0, 4), +ngay.slice(5, 7) - 1, +ngay.slice(8, 10)) - VN + moc * 60e3, tp = X.tp || 0;
       if (now > mocT - tp * 60e3) { const t = tp ? (tp % 60 ? (tp >= 60 ? Math.floor(tp / 60) + ' giờ ' : '') + (tp % 60) + ' phút' : (tp / 60) + ' giờ') : ''; return bad('Công ty quy định gửi đơn trước khi ' + (kieu === 'muon' ? 'vào ca' : 'về') + (tp ? ' tối thiểu ' + t : '') + '. Đã quá hạn để xin cho ngày này.'); } }
-    if (X.han === 'ngay' && ngay < today) return bad('Công ty quy định gửi đơn chậm nhất trong ngày phát sinh.');
-    if (X.han === 'n' && ngay < addDaysIso(today, -X.n)) return bad('Công ty cho gửi bù chậm nhất ' + X.n + ' ngày sau ngày phát sinh.');
+    if (!isTrip && X.han === 'ngay' && ngay < today) return bad('Công ty quy định gửi đơn chậm nhất trong ngày phát sinh.');
+    if (!isTrip && X.han === 'n' && ngay < addDaysIso(today, -X.n)) return bad('Công ty cho gửi bù chậm nhất ' + X.n + ' ngày sau ngày phát sinh.');
     const trung = await db.prepare("SELECT so FROM xin_muon WHERE ma = ? AND ngay = ? AND kieu = ? AND trang_thai IN ('Chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay, kieu).first();
     if (trung) return bad('Đã có đơn ' + trung.so + ' cho ngày này.');
-    if (X.max) { const c = await db.prepare("SELECT COUNT(*) AS n FROM xin_muon WHERE ma = ? AND substr(ngay, 1, 7) = ? AND trang_thai IN ('Chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay.slice(0, 7)).first(); if ((c.n || 0) >= X.max) return bad('Công ty cho gửi tối đa ' + X.max + ' đơn đi muộn, về sớm mỗi tháng. Tháng ' + (+ngay.slice(5, 7)) + ' bạn đã gửi đủ.'); }
+    if (!isTrip && X.max) { const c = await db.prepare("SELECT COUNT(*) AS n FROM xin_muon WHERE ma = ? AND substr(ngay, 1, 7) = ? AND kieu IN ('muon','som') AND trang_thai IN ('Chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay.slice(0, 7)).first(); if ((c.n || 0) >= X.max) return bad('Công ty cho gửi tối đa ' + X.max + ' đơn đi muộn, về sớm, công tác mỗi tháng. Tháng ' + (+ngay.slice(5, 7)) + ' bạn đã gửi đủ.'); }
     const so = 'XM-' + today.replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase(), BYd = await hsLite(db, demo), NDD = nguoiDuyet(BYd, s.nv.ma);
-    await db.prepare("INSERT INTO xin_muon (so, ma, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?)").bind(so, s.nv.ma, ngay, kieu, gio, phut, ly, now, NDD.map(x => BYd[x].ten).join(', ') || (HS && HS.ql_ten) || '', NDD[0] || (HS && HS.ql) || null, now).run();
-    later(req, pushTo(db, cfg, url.origin, NDD.length ? NDD : [HS && HS.ql], { t: s.nv.ten + ' xin ' + (kieu === 'muon' ? 'đi muộn' : 'về sớm'), b: ngay.slice(8) + '/' + ngay.slice(5, 7) + ' · ' + (kieu === 'muon' ? 'đến ' : 'về ') + gio + (phut ? ' (' + phut + ' phút)' : '') + ' · ' + ly, u: '/?tab=don', tag: so }));
+    if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
+    const packed = requestTextPack(ly, '', anh); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
+    await db.prepare("INSERT INTO xin_muon (so, ma, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?)").bind(so, s.nv.ma, ngay, kieu, isTrip ? null : gio, phut, packed, now, NDD.map(x => BYd[x].ten).join(', ') || (HS && HS.ql_ten) || '', NDD[0] || (HS && HS.ql) || null, now).run();
+    const desc = isTrip ? xmTypeName(kieu) : (kieu === 'muon' ? 'đi muộn' : 'về sớm');
+    later(req, requestNotice(db, cfg, url.origin, demo, NDD.length ? NDD : [HS && HS.ql], s.nv.ten + ' gửi đơn ' + desc.toLowerCase(), ngay.slice(8) + '/' + ngay.slice(5, 7) + (gio ? ' · ' + (kieu === 'muon' ? 'đến ' : 'về ') + gio : '') + (phut ? ' (' + phut + ' phút)' : '') + ' · ' + ly, so, req, now));
     return json({ ok: true, so, phut });
   }
   /* ----- 16/11/2026: thông tin chung + thông báo cho nhân viên ----- */
@@ -1413,7 +1508,7 @@ async function api(req, env, url) {
       const mStart = Date.UTC(m.y, Number(m.m) - 1, 1) - VN;
       o.thang = (await punchesBetween(db, mStart, d0 + 864e5, s.nv.ma)).filter(r => !r.huy).map(r => ({ t: r.t, loai: r.loai, cach: r.cach }));
       o.me.ncc = !!s.nv.ncc; o.ket_noi = !!cfg.sync_key;
-      o.don = (await db.prepare('SELECT so, loai, tu, den, so_ngay, ly_do, trang_thai, ly_do_tc, nguoi_duyet, ngay_duyet, ban_giao FROM don WHERE ma = ? ORDER BY tu DESC LIMIT 15').bind(s.nv.ma).all()).results;
+      o.don = (await db.prepare('SELECT so, loai, tu, den, so_ngay, ly_do, trang_thai, ly_do_tc, nguoi_duyet, ngay_duyet, ban_giao FROM don WHERE ma = ? ORDER BY tu DESC LIMIT 15').bind(s.nv.ma).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) }));
       o.bao_sai = (await db.prepare('SELECT ngay, noi_dung, tao FROM bao_sai WHERE ma = ? AND ngay >= ?').bind(s.nv.ma, isoVN(now - 100 * 864e5)).all()).results;
       { const BY = await hsLite(db, demo); o.duyet = (await donChoDuyet(db, BY, s.nv.ma)).concat(await xmChoDuyet(db, BY, s.nv.ma)); // 13/11: mọi người có quyền duyệt đều thấy đơn · 16/11: kèm đơn xin đi muộn / về sớm
         o.nguoi_duyet = nguoiDuyet(BY, s.nv.ma).map(x => BY[x].ten);
@@ -1421,7 +1516,7 @@ async function api(req, env, url) {
       const av = await db.prepare('SELECT at FROM anh WHERE ma = ?').bind(s.nv.ma).first(); o.me.anh = av ? av.at : 0;
       o.cong = (await db.prepare('SELECT ym, du_lieu, chot, xn, xn_at, phan_hoi FROM cong WHERE ma = ? ORDER BY ym DESC LIMIT ' + (demo ? 6 : 3)).bind(s.nv.ma).all()).results.map(r => ({ ...r, du_lieu: JSON.parse(r.du_lieu || '{}') }));
       const HS = await hsOf(db, s.nv.ma, demo); o.xm_cfg = xmCfgOf(HS, demo); // 16/11: đơn xin đi muộn / về sớm
-      if (o.xm_cfg.on) o.xm = (await db.prepare('SELECT so, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, ngay_duyet, ly_do_tc FROM xin_muon WHERE ma = ? AND ngay >= ? ORDER BY ngay DESC, tao DESC LIMIT 30').bind(s.nv.ma, isoVN(now - 92 * 864e5)).all()).results;
+      if (o.xm_cfg.on) o.xm = (await db.prepare('SELECT so, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, ngay_duyet, ly_do_tc FROM xin_muon WHERE ma = ? AND ngay >= ? ORDER BY ngay DESC, tao DESC LIMIT 30').bind(s.nv.ma, isoVN(now - 92 * 864e5)).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) }));
       if (HS) { HS.hop_dong = (HS.hop_dong || []).map(h => ({ ...h, html: h.html ? 1 : 0 })); o.hs = HS; o.kho = (await db.prepare('SELECT id, kho, ref, ten, loai, size, at FROM kho_file WHERE ma = ? ORDER BY at DESC LIMIT 200').bind(s.nv.ma).all()).results;
         if (demo && !o.kho.length) o.kho = demoScans(s.nv.ma, HS).map(x => ({ id: x.id, kho: x.kho, ref: x.ref, ten: x.ten, loai: 'image/svg+xml', size: 2400, at: now, mau: 1 })); }
       { const dt = await dtOfMa(db, s.nv.ma, demo); if (o.hs) delete o.hs.dt; if (dt && (dt.kh || []).length) { o.dt = dtForApp(dt); o.dt_kq = {}; (await db.prepare('SELECT kh, du_lieu, at FROM dt_kq WHERE ma = ?').bind(s.nv.ma).all()).results.forEach(r => { try { o.dt_kq[r.kh] = JSON.parse(r.du_lieu); } catch (e) { } }); } }
@@ -1537,11 +1632,13 @@ async function api(req, env, url) {
   /* ----- 0.3.1: nhân viên gửi / hủy đơn nghỉ, xác nhận công tháng ----- */
   if (p === '/api/don' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
-    if (body.huy) { const r = await db.prepare("UPDATE don SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt'").bind(now, String(body.huy), s.nv.ma).run(); return r.meta.changes ? json({ ok: true }) : bad('Chỉ hủy được đơn đang chờ duyệt.'); }
-    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương'];
-    const loai = LOAI.includes(body.loai) ? body.loai : null, tu = String(body.tu || ''), den = String(body.den || body.tu || ''), ly = String(body.ly_do || '').trim().slice(0, 300);
+    if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
+    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'];
+    const loai = LOAI.includes(body.loai) ? body.loai : null, tu = String(body.tu || ''), den = String(body.den || body.tu || ''), ly = String(body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi || ''), anh = requestPhotos(body.anh);
     if (!loai) return bad('Chọn loại nghỉ.');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu) return bad('Chọn ngày nghỉ (đến ngày không trước từ ngày).');
+    if (loai === 'Nghỉ phép nửa ngày' && (tu !== den || !['sang', 'chieu'].includes(buoi))) return bad('Chọn một ngày nghỉ và buổi sáng hoặc buổi chiều.');
+    if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
     if (den > isoVN(now + 366 * 864e5) || tu < isoVN(now - 62 * 864e5)) return bad('Ngày nghỉ chỉ trong khoảng 2 tháng trước đến 1 năm tới.');
     const trung = await db.prepare("SELECT so FROM don WHERE ma = ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(s.nv.ma, den, tu).first();
     if (trung) return bad('Đã có đơn ' + trung.so + ' trùng ngày.');
@@ -1553,8 +1650,9 @@ async function api(req, env, url) {
         if (DH.k === 'bu' && now > st0 + m * 60e3) return bad('Công ty cho gửi bù đơn ' + loai.toLowerCase() + ' muộn nhất ' + tt + ' sau khi bắt đầu nghỉ. Đơn này đã quá hạn – báo quản lý trực tiếp để kế toán nhập đơn.'); } }
     let bg = ''; const bgm = String(body.ban_giao || '').trim().toUpperCase(); if (bgm) { if (bgm === s.nv.ma) return bad('Người nhận bàn giao phải là người khác.'); const x = await db.prepare('SELECT ma, ten FROM nv WHERE ma = ? AND active = 1').bind(bgm).first(); if (!x) return bad('Không tìm thấy người nhận bàn giao.'); bg = x.ma + '|' + x.ten; }
     const BYd = await hsLite(db, demo), NDD = nguoiDuyet(BYd, s.nv.ma); // 13/11: ghi tên những người được duyệt lúc đơn còn chờ; duyệt xong ghi đè bằng tên người đã duyệt
-    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, 'Điện thoại', ?)").bind(so, s.nv.ma, loai, tu, den, ly, now, NDD.length ? NDD.map(x => BYd[x].ten).join(', ') : (HS && HS.ql_ten) || '', NDD[0] || (HS && HS.ql) || null, bg, now).run();
-    later(req, pushTo(db, cfg, url.origin, NDD.length ? NDD : [HS && HS.ql], { t: s.nv.ten + ' gửi đơn ' + loai.toLowerCase(), b: tu.slice(8) + '/' + tu.slice(5, 7) + (den !== tu ? ' – ' + den.slice(8) + '/' + den.slice(5, 7) : '') + (ly ? ' · ' + ly : ''), u: '/?tab=don', tag: so })); // 16/11: thông báo đẩy
+    const packed = requestTextPack(ly, buoi, anh); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
+    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, so_ngay, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, 'Điện thoại', ?)").bind(so, s.nv.ma, loai, tu, den, loai === 'Nghỉ phép nửa ngày' ? 0.5 : null, packed, now, NDD.length ? NDD.map(x => BYd[x].ten).join(', ') : (HS && HS.ql_ten) || '', NDD[0] || (HS && HS.ql) || null, bg, now).run();
+    later(req, requestNotice(db, cfg, url.origin, demo, NDD.length ? NDD : [HS && HS.ql], s.nv.ten + ' gửi đơn ' + loai.toLowerCase(), tu.slice(8) + '/' + tu.slice(5, 7) + (den !== tu ? ' – ' + den.slice(8) + '/' + den.slice(5, 7) : '') + (loai === 'Nghỉ phép nửa ngày' ? ' · buổi ' + (buoi === 'sang' ? 'sáng' : 'chiều') : '') + (ly ? ' · ' + ly : ''), so, req, now));
     return json({ ok: true, so });
   }
   /* ----- 11/11 15:32: quản lý trực tiếp duyệt đơn trên app · sơ đồ tổ chức · ảnh đại diện · đổi mã PIN ----- */
@@ -1611,7 +1709,7 @@ async function api(req, env, url) {
       if (!duocDuyet(await hsLite(db, demo), s.nv.ma, x0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
       const r = await db.prepare("UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
       if (!r.meta.changes) return bad('Đơn này vừa được người khác xử lý.');
-      later(req, pushTo(db, cfg, url.origin, [x0.ma], { t: 'Đơn xin ' + (x0.kieu === 'muon' ? 'đi muộn' : 'về sớm') + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), b: x0.ngay.slice(8) + '/' + x0.ngay.slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), u: '/?tab=don', tag: so }));
+      later(req, requestNotice(db, cfg, url.origin, demo, [x0.ma], 'Đơn ' + xmTypeName(x0.kieu) + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), x0.ngay.slice(8) + '/' + x0.ngay.slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
       return json({ ok: true, nguoi: s.nv.ten });
     }
     const d0 = await db.prepare('SELECT so, ma, duyet_ma, trang_thai, nguoi_duyet, loai, tu FROM don WHERE so = ?').bind(so).first();
@@ -1620,7 +1718,7 @@ async function api(req, env, url) {
     if (!duocDuyet(await hsLite(db, demo), s.nv.ma, d0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
     // nhiều người cùng có quyền: ai bấm trước thì đơn chuyển trạng thái và ghi tên người đó; người bấm sau nhận thông báo đã xử lý
     const r = await db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
-    if (r.meta.changes) later(req, pushTo(db, cfg, url.origin, [d0.ma], { t: 'Đơn ' + String(d0.loai || 'nghỉ').toLowerCase() + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), b: String(d0.tu || '').slice(8) + '/' + String(d0.tu || '').slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), u: '/?tab=don', tag: so }));
+    if (r.meta.changes) later(req, requestNotice(db, cfg, url.origin, demo, [d0.ma], 'Đơn ' + String(d0.loai || 'nghỉ').toLowerCase() + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), String(d0.tu || '').slice(8) + '/' + String(d0.tu || '').slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
     return r.meta.changes ? json({ ok: true, nguoi: s.nv.ten }) : bad('Đơn này vừa được người khác xử lý.');
   }
   if (p === '/api/bo-phan') { // 13/11: Bộ phận của tôi – những người mình có quyền duyệt đơn: hôm nay ai đi làm / nghỉ / chưa chấm, đơn, bảng công tháng (chỉ xem)
@@ -1635,7 +1733,7 @@ async function api(req, env, url) {
     if (demo) tv.forEach(ma => { const e = demoFind(ma); if (e && !nghi[ma]) { const d = (e.don || []).find(x => x.trang_thai === 'Đã duyệt' && x.tu <= today && today <= x.den); if (d) nghi[ma] = d.loai; } });
     (await db.prepare(`SELECT ma, at FROM anh WHERE ma IN (${ph})`).bind(...tv).all()).results.forEach(x => { av[x.ma] = x.at; });
     const cho = await donChoDuyet(db, BY, me), choMa = {}; cho.forEach(d => { choMa[d.ma] = 1; });
-    const xong = (await db.prepare(`SELECT d.so, d.ma, n.ten, d.loai, d.tu, d.den, d.so_ngay, d.trang_thai, d.nguoi_duyet, d.ngay_duyet, d.ly_do_tc FROM don d LEFT JOIN nv n ON n.ma = d.ma WHERE d.trang_thai IN ('Đã duyệt','Từ chối') AND d.ngay_duyet >= ? AND d.ma IN (${ph}) ORDER BY d.cap_nhat DESC LIMIT 15`).bind(isoVN(now - 30 * 864e5), ...tv).all()).results;
+    const xong = (await db.prepare(`SELECT d.so, d.ma, n.ten, d.loai, d.tu, d.den, d.so_ngay, d.ly_do, d.ban_giao, d.trang_thai, d.nguoi_duyet, d.ngay_duyet, d.ly_do_tc FROM don d LEFT JOIN nv n ON n.ma = d.ma WHERE d.trang_thai IN ('Đã duyệt','Từ chối') AND d.ngay_duyet >= ? AND d.ma IN (${ph}) ORDER BY d.cap_nhat DESC LIMIT 15`).bind(isoVN(now - 30 * 864e5), ...tv).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) }));
     const yms = (await db.prepare(`SELECT DISTINCT ym FROM cong WHERE ma IN (${ph}) ORDER BY ym DESC LIMIT 6`).bind(...tv).all()).results.map(x => x.ym), ymq = String(url.searchParams.get('ym') || ''), ym = yms.includes(ymq) ? ymq : yms[0] || '';
     let cong = null;
     if (ym) { const rows = {}; (await db.prepare(`SELECT ma, du_lieu, chot, xn FROM cong WHERE ym = ? AND ma IN (${ph})`).bind(ym, ...tv).all()).results.forEach(r => { let d = {}; try { d = JSON.parse(r.du_lieu || '{}'); } catch (e) { } rows[r.ma] = { cong: d.cong, huong: d.huong, tam: d.tam ? 1 : 0, ngay: d.ngay || {}, ct: d.ct || {}, xn: r.xn }; }); // 13/11 16:14: ct = chi tiết từng ngày [vào, ra, muộn, sớm, giờ công, tăng ca] để bấm vào ô ngày
