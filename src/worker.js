@@ -1044,9 +1044,11 @@ async function api(req, env, url) {
     if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' AND trang_thai != 'Đã hủy' ORDER BY tao DESC LIMIT 200").all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
     if (r === 'cong' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
-      const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [], keep = new Set(list.map(x => String(x.ma || '').toUpperCase()));
       for (const x of list) { const ma = String(x.ma || '').toUpperCase(), e = demoFind(ma); if (!e) continue; const dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000), old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first(); if (old && old.du_lieu === dl) continue;
         st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80))); }
+      const remove = Array.isArray(body.remove) ? [...new Set(body.remove.slice(0, 2000).map(ma => String(ma || '').trim().toUpperCase()).filter(ma => MA_RE.test(ma) && demoFind(ma) && !keep.has(ma)))] : [];
+      remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
       await ccCalcClearMonth(db, cfg, ym);
       if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
@@ -1274,13 +1276,15 @@ async function api(req, env, url) {
     }
     if (r === 'cong' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
-      const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [], keep = new Set(list.map(x => String(x.ma || '').toUpperCase()));
       for (const x of list) {
         const ma = String(x.ma || '').toUpperCase(), dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000);
         const old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first();
         if (old && old.du_lieu === dl) continue; // không đổi → giữ xác nhận cũ
         st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80)));
       }
+      const remove = Array.isArray(body.remove) ? [...new Set(body.remove.slice(0, 2000).map(ma => String(ma || '').trim().toUpperCase()).filter(ma => MA_RE.test(ma) && !keep.has(ma)))] : [];
+      remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
       await ccCalcClearMonth(db, cfg, ym);
       if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
