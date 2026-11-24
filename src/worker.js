@@ -566,11 +566,15 @@ async function ccCalcSchedule(db, cfg, now) {
 async function ccCalcApi(r, db, cfg, body, url, req, now, jc) {
   if (r === 'cong-tinh-cfg') {
     if (req.method === 'GET') { await setCfg(db, { cc_tinh_active_at: String(now) }); cfg.cc_tinh_active_at = String(now); }
-    if (req.method === 'POST' && body && Object.prototype.hasOwnProperty.call(body, 'auto')) {
-      const auto = body.auto ? '1' : '0'; await setCfg(db, { cc_tinh_auto: auto, cc_tinh_active_at: String(now), cc_tinh_due: '' }); cfg.cc_tinh_auto = auto; cfg.cc_tinh_active_at = String(now); cfg.cc_tinh_due = '';
+    if (req.method === 'POST' && body) {
+      const next = {};
+      if (Object.prototype.hasOwnProperty.call(body, 'auto')) { next.cc_tinh_auto = body.auto ? '1' : '0'; next.cc_tinh_active_at = String(now); next.cc_tinh_due = ''; }
+      if (Object.prototype.hasOwnProperty.call(body, 'deviceAuto')) next.cc_device_tool_auto = body.deviceAuto ? '1' : '0';
+      if (Object.keys(next).length) { await setCfg(db, next); Object.assign(cfg, next); }
     }
     if (cfg.cc_tinh_auto == null) cfg.cc_tinh_auto = '0';
-    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', active: !!Number(cfg.cc_tinh_active_at || 0) });
+    if (cfg.cc_device_tool_auto == null) cfg.cc_device_tool_auto = '0';
+    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', deviceAuto: cfg.cc_device_tool_auto === '1', active: !!Number(cfg.cc_tinh_active_at || 0) });
   }
   if (r === 'cong-tinh' && req.method === 'GET' && url.searchParams.has('ym')) {
     const ym = String(url.searchParams.get('ym') || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
