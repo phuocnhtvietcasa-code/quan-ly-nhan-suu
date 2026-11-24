@@ -6,7 +6,7 @@
    Giờ chấm lấy theo đồng hồ máy chủ (không tin giờ điện thoại). Hiển thị theo giờ Việt Nam (UTC+7). */
 import qrcode from './qrcode.mjs';
 import APP_HTML from './app.html';
-import { ICON_PNG_B64, ICON_SVG } from './icon.js';
+import { ICON_PNG_B64, ICON_192_PNG_B64, APPLE_TOUCH_ICON_B64, ICON_SVG } from './icon.js';
 import { DEMO, DEMO_PIN } from './demo-data.js';
 import { DEMO_HN } from './demo-hoinhap.js';
 import { DEMO_DT } from './demo-daotao.js'; // 12/11 16:30: khóa đào tạo nội bộ mẫu (0.6.1 bản thử)
@@ -604,6 +604,17 @@ async function bcApi(r, db, cfg, body, url, req, now, demo, jc, ctyOk) {
   return null;
 }
 async function hsOf(db, ma, demo) { const HS = await hoSoOf(db, ma); if (HS || !demo) return HS; const e = demoFind(ma); return e && e.hs ? { ...e.hs } : null; }
+function hsHasOfficialHdl(HS, today) {
+  const list = HS && (HS.hop_dong || HS.HD || (HS.hd ? [HS.hd] : [])) || [];
+  return list.some(h => {
+    const type = String(h.loai || h['Loại hợp đồng'] || ''), start = String(h.hl || h['Ngày hiệu lực'] || '').slice(0, 10), end = String(h.het || h['Ngày hết hạn'] || '').slice(0, 10), status = String(h.tt || '');
+    const officialType = /không xác định thời hạn/i.test(type) || /(?:6|12|24|36)\s*tháng/i.test(type) || /bán thời gian|không trọn thời gian|part[- ]?time/i.test(type);
+    if (!/hđlđ|hợp đồng lao động/i.test(type) || !officialType || /thử việc|cộng tác viên|dịch vụ|khoán việc/i.test(type)) return false;
+    if (/chưa hiệu lực|đã hết hạn|đã chấm dứt/i.test(status)) return false;
+    return !!start && start <= today && (!end || end >= today);
+  });
+}
+function zeroAppQuota(q) { return q ? { ...q, tong: 0, con: 0, da: 0, cho: 0, ton: null, total: 0, left: 0, used: 0, wait: 0 } : q; }
 // 11/11 16:12: bản thử – bản scan MẪU (ảnh SVG tự vẽ, ghi rõ dữ liệu hư cấu) cho giấy tờ đã nộp và hợp đồng, để thử nút Xem / Tải; máy chủ thử không lưu file thật
 function demoScans(ma, HS) {
   const out = []; (HS.giay_to || []).forEach((g, i) => { if (g.tt === 'Đã nộp') out.push({ id: 'mau-' + ma + '-g' + i, kho: 'hoso', ref: g.ten, ten: g.ten + ' – bản scan mẫu.svg', t: g.ten, d: g.ngay || '' }); });
@@ -1612,10 +1623,10 @@ async function api(req, env, url) {
         o.nguoi_duyet = nguoiDuyet(BY, s.nv.ma).map(x => BY[x].ten);
         const tv = Object.keys(BY).filter(k => nguoiDuyet(BY, k).includes(s.nv.ma)); if (tv.length) o.bp = { n: tv.length }; }
       const av = await db.prepare('SELECT at FROM anh WHERE ma = ?').bind(s.nv.ma).first(); o.me.anh = av ? av.at : 0;
-      o.cong = (await db.prepare('SELECT ym, du_lieu, chot, xn, xn_at, phan_hoi FROM cong WHERE ma = ? ORDER BY ym DESC LIMIT ' + (demo ? 6 : 3)).bind(s.nv.ma).all()).results.map(r => ({ ...r, du_lieu: JSON.parse(r.du_lieu || '{}') }));
+      o.cong = (await db.prepare('SELECT ym, du_lieu, chot, xn, xn_at, phan_hoi FROM cong WHERE ma = ? ORDER BY ym DESC LIMIT ' + (demo ? 6 : 3)).bind(s.nv.ma).all()).results.map(r => { const du_lieu = JSON.parse(r.du_lieu || '{}'); for (const dd of Object.keys(du_lieu.ngay || {})) if (String(du_lieu.ngay[dd]).toUpperCase() === 'P') du_lieu.ngay[dd] = 'PN'; return { ...r, du_lieu }; });
       const HS = await hsOf(db, s.nv.ma, demo); o.xm_cfg = xmCfgOf(HS, demo); // 16/11: đơn xin đi muộn / về sớm
       if (o.xm_cfg.on) o.xm = (await db.prepare('SELECT so, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, ngay_duyet, ly_do_tc FROM xin_muon WHERE ma = ? AND ngay >= ? ORDER BY ngay DESC, tao DESC LIMIT 30').bind(s.nv.ma, isoVN(now - 92 * 864e5)).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) }));
-      if (HS) { HS.hop_dong = (HS.hop_dong || []).map(h => ({ ...h, html: h.html ? 1 : 0 })); o.hs = HS; o.kho = (await db.prepare('SELECT id, kho, ref, ten, loai, size, at FROM kho_file WHERE ma = ? ORDER BY at DESC LIMIT 200').bind(s.nv.ma).all()).results;
+      if (HS) { if (HS.qp && !hsHasOfficialHdl(HS, isoVN(now))) HS.qp = zeroAppQuota(HS.qp); HS.hop_dong = (HS.hop_dong || []).map(h => ({ ...h, html: h.html ? 1 : 0 })); o.hs = HS; o.kho = (await db.prepare('SELECT id, kho, ref, ten, loai, size, at FROM kho_file WHERE ma = ? ORDER BY at DESC LIMIT 200').bind(s.nv.ma).all()).results;
         if (demo && !o.kho.length) o.kho = demoScans(s.nv.ma, HS).map(x => ({ id: x.id, kho: x.kho, ref: x.ref, ten: x.ten, loai: 'image/svg+xml', size: 2400, at: now, mau: 1 })); }
       { const dt = await dtOfMa(db, s.nv.ma, demo); if (o.hs) delete o.hs.dt; if (dt && (dt.kh || []).length) { o.dt = dtForApp(dt); o.dt_kq = {}; (await db.prepare('SELECT kh, du_lieu, at FROM dt_kq WHERE ma = ?').bind(s.nv.ma).all()).results.forEach(r => { try { o.dt_kq[r.kh] = JSON.parse(r.du_lieu); } catch (e) { } }); } }
       { const hn = await hnOfMa(db, s.nv.ma, demo); if (o.hs) delete o.hs.hn; if (hn) { o.hn = hn; o.hn_xong = (await db.prepare('SELECT sid, x, at FROM hn_xong WHERE ma = ?').bind(s.nv.ma).all()).results; } }
@@ -1630,12 +1641,12 @@ async function api(req, env, url) {
         o.tb = (await db.prepare('SELECT id, cty, tieu_de, noi_dung, anh IS NOT NULL AS co_anh, popup, den, loai, ref, nguoi, at FROM tb ORDER BY at DESC LIMIT 300').all()).results.filter(r => tbHop(r, s.nv.ma, H2) && !(doc[r.id] && doc[r.id].xoa)).slice(0, 100).map(r => ({ id: r.id, tieu_de: r.tieu_de, noi_dung: r.noi_dung, co_anh: r.co_anh ? 1 : 0, popup: r.popup, loai: r.loai, ref: r.ref, nguoi: r.nguoi, at: r.at, doc_at: doc[r.id] ? doc[r.id].doc_at : null }));
         const vr = await db.prepare('SELECT du_lieu FROM vb WHERE cty = ?').bind(ctyV).first(); if (vr) { try { const V = JSON.parse(vr.du_lieu); V.ds = (V.ds || []).filter(x => x && x.tt !== 'Dự thảo'); o.vb = V; } catch (e) { } } }
       o.cty = (o.hs && o.hs.cty) || cfg.ten_cty; // 11/11 15:32: tên công ty của chính người đăng nhập (bản thử có 2 công ty mẫu)
-      if (demo) { const e = demoFind(s.nv.ma); if (e) { o.cty = e.cty; o.ho_so = { cty: e.cty, pb: e.pb, cd: e.cd, vao: e.vao, tt: e.tt, email: e.email, hd: e.hd, qp: e.qp, bl: e.bl }; o.don = o.don.concat(e.don.map(d => ({ ...d, mau: 1 }))).slice(0, 20);
+      if (demo) { const e = demoFind(s.nv.ma); if (e) { o.cty = e.cty; o.ho_so = { cty: e.cty, pb: e.pb, cd: e.cd, vao: e.vao, tt: e.tt, email: e.email, hd: e.hd, qp: e.qp, bl: e.bl }; if (o.ho_so.qp && !hsHasOfficialHdl(HS || e.hs || { hd: e.hd }, isoVN(now))) o.ho_so.qp = zeroAppQuota(o.ho_so.qp); o.don = o.don.concat(e.don.map(d => ({ ...d, mau: 1 }))).slice(0, 20);
         // công tạm tính tháng đang mở = ký hiệu trong dữ liệu mẫu + các ngày sau đó tính từ lượt chấm
         const ymNow = isoVN(now).slice(0, 7), tc = o.cong.find(c => c.ym === ymNow && c.du_lieu.tam);
         if (tc) { const dl = tc.du_lieu, ng = dl.ngay = dl.ngay || {}, by = {}, today = isoVN(now);
           o.thang.forEach(r => { const k = isoVN(r.t), x = by[k] = by[k] || {}; x[r.loai] = 1; if (r.loai === 'vao' && !x.tv) x.tv = r.t; if (r.loai === 'ra') x.tr = r.t; });
-          Object.keys(by).forEach(k => { if (k <= DEMO.ref) return; const dd = k.slice(8, 10), b = by[k]; if (b.vao && b.ra) { if (ng[dd] !== 'X') { ng[dd] = 'X'; dl.cong = Math.round((dl.cong + 1) * 100) / 100; dl.huong = Math.round((dl.huong + 1) * 100) / 100; } const ct = dl.ct = dl.ct || {}; if (!ct[dd]) { const ti = vnHM(b.tv), to = vnHM(b.tr), h = Math.max(0, Math.min(8, (b.tr - b.tv) / 3600e3 - 1)); ct[dd] = [ti, to, Math.max(0, hm2min(ti) - 480), Math.max(0, 1020 - hm2min(to)), Math.round(h * 100) / 100, 0]; } } else if (k === today) ng[dd] = '…'; else ng[dd] = '?'; });
+          Object.keys(by).forEach(k => { if (k <= DEMO.ref) return; const dd = k.slice(8, 10), b = by[k]; if (b.vao && b.ra) { const ti = vnHM(b.tv), to = vnHM(b.tr), a = hm2min(ti), b0 = hm2min(to), end = a !== null && b0 !== null && b0 < a ? b0 + 1440 : b0, brk = a !== null && end !== null ? Math.max(0, Math.min(end, 780) - Math.max(a, 720)) : 0; let h = a !== null && end !== null ? Math.max(0, Math.min(8, (end - a - brk) / 60)) : 0; if ((end === 720 && h >= 3.4) || (a >= 780 && h >= 4)) h = 4; else if (a >= 720) h = Math.min(4, h); h = Math.round(h * 100) / 100; if (ng[dd] !== 'X' && ng[dd] !== 'X/2') { ng[dd] = h >= 8 ? 'X' : 'X/2'; const work = Math.trunc(h / 8 * 1000) / 1000; dl.cong = Math.trunc(((+dl.cong || 0) + work) * 1000) / 1000; dl.huong = Math.trunc(((+dl.huong || 0) + work) * 1000) / 1000; } const ct = dl.ct = dl.ct || {}; if (!ct[dd]) ct[dd] = [ti, to, Math.max(0, a - 480), Math.max(0, 1020 - hm2min(to)), h, 0]; } else if (k === today) ng[dd] = '…'; else ng[dd] = '?'; });
           tc.chot = now; } } }
     }
     return json(o);
@@ -2062,8 +2073,8 @@ function fmtShort(t) { const q = vnParts(t); return q.h + ':' + q.mi + ' ' + q.d
 const SW_JS = `self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', e => {
-  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (x) { d = { t: 'Chấm công', b: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.t || 'Chấm công', { body: d.b || '', icon: '/icon.png', badge: '/icon.png', tag: d.tag || undefined, data: { u: d.u || '/' } }));
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (x) { d = { t: 'HRM-VCS', b: e.data ? e.data.text() : '' }; }
+  e.waitUntil(self.registration.showNotification(d.t || 'HRM-VCS', { body: d.b || '', icon: '/icon.png', badge: '/icon.png', tag: d.tag || undefined, data: { u: d.u || '/' } }));
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close(); const u = new URL((e.notification.data && e.notification.data.u) || '/', self.location.origin).href;
@@ -2072,7 +2083,7 @@ self.addEventListener('notificationclick', e => {
 async function brCfg(env) { try { await ensureSchema(env.DB); return await getCfg(env.DB); } catch (e) { return {}; } } // 16/11/2026: thương hiệu riêng (br_ten, br_logo) lưu từ Cài đặt → Thương hiệu
 function brJs(c) { return JSON.stringify({ name: c.br_ten || '', logo: c.br_logo ? '/logo.' + ((/^data:image\/(png|webp|jpeg|svg\+xml)/.exec(c.br_logo) || [])[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg') : '', cty: c.ten_cty || '' }).replace(/</g, '\\u003c'); }
 function htmlEsc(s) { return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
-const MANIFEST = JSON.stringify({ name: 'Chấm công', short_name: 'Chấm công', start_url: '/', scope: '/', display: 'standalone', background_color: '#F4EFE5', theme_color: '#2F7D4F', icons: [{ src: '/icon.png', sizes: '512x512', type: 'image/png' }, { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml' }] });
+const MANIFEST = JSON.stringify({ name: 'HRM-VCS', short_name: 'HRM-VCS', start_url: '/', scope: '/', display: 'standalone', background_color: '#FFFFFF', theme_color: '#2F7D4F', icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon.png', sizes: '512x512', type: 'image/png' }] });
 function b64ToBytes(b64) { const s = atob(b64), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
 const SEC = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'permissions-policy': 'camera=(), microphone=(), geolocation=()' };
 
@@ -2087,8 +2098,10 @@ export default {
     try {
       if (url.pathname.startsWith('/api/')) return withMay(await api(req, env, url));
       if (url.pathname === '/sw.js') return new Response(SW_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'no-cache', 'service-worker-allowed': '/' } }); // 16/11: thông báo đẩy
-      if (url.pathname === '/manifest.webmanifest') { const m = JSON.parse(MANIFEST), c = isDemo(env, url) ? {} : await brCfg(env); const nm = (c.br_ten || c.ten_cty || '').slice(0, 40); if (nm) { m.name = nm; m.short_name = nm.slice(0, 24); } const lg = /^data:image\/(png|webp|jpeg);base64,/.exec(c.br_logo || ''); if (lg) m.icons.unshift({ src: '/logo.' + (lg[1] === 'jpeg' ? 'jpg' : lg[1]), sizes: 'any', type: 'image/' + lg[1] }); return new Response(JSON.stringify(m), { headers: { 'content-type': 'application/manifest+json', 'cache-control': 'max-age=600' } }); }
+      if (url.pathname === '/manifest.webmanifest') return new Response(MANIFEST, { headers: { 'content-type': 'application/manifest+json', 'cache-control': 'max-age=600' } });
       if (/^\/logo\.(png|webp|jpg|svg)$/.test(url.pathname)) { const c = await brCfg(env), lg = /^data:(image\/[a-z+]+);base64,(.*)$/.exec(c.br_logo || ''); if (!lg) return new Response('', { status: 404 }); return new Response(b64ToBytes(lg[2]), { headers: { 'content-type': lg[1], 'cache-control': 'max-age=600' } }); }
+      if (url.pathname === '/apple-touch-icon.png') return new Response(b64ToBytes(APPLE_TOUCH_ICON_B64), { headers: { 'content-type': 'image/png', 'cache-control': 'max-age=86400' } });
+      if (url.pathname === '/icon-192.png') return new Response(b64ToBytes(ICON_192_PNG_B64), { headers: { 'content-type': 'image/png', 'cache-control': 'max-age=86400' } });
       if (url.pathname === '/icon.png') return new Response(b64ToBytes(ICON_PNG_B64), { headers: { 'content-type': 'image/png', 'cache-control': 'max-age=86400' } });
       if (url.pathname === '/font/tay-latin.woff2' || url.pathname === '/font/tay-vi.woff2') return new Response(b64ToBytes(url.pathname === '/font/tay-vi.woff2' ? TAY_VI : TAY_LATIN), { headers: { 'content-type': 'font/woff2', 'cache-control': 'public, max-age=2592000, immutable' } });
       if (url.pathname === '/qr-app.svg') return new Response(qrSvg(url.origin + '/'), { headers: { 'content-type': 'image/svg+xml', 'cache-control': 'max-age=3600', 'access-control-allow-origin': '*' } }); // 12/11: mã QR mở app nhân viên (phần mềm hiện ở trang Ứng dụng nhân viên)
@@ -2106,14 +2119,14 @@ export default {
       const route = ROUTES[url.pathname.replace(/\/+$/, '') || '/'];
       if (!route) return new Response('Không có trang này', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
       let html = APP_HTML.replace('{{ROUTE}}', route).replace(/{{VER}}/g, VER);
-      if (!isDemo(env, url)) { const c = await brCfg(env), nm = (c.br_ten || c.ten_cty || '').slice(0, 40), lg = /^data:image\/(png|webp|jpeg|svg\+xml);base64,/.exec(c.br_logo || ''); if (nm) html = html.replace('<title>Chấm công</title>', '<title>' + htmlEsc(nm) + '</title>').replace('content="Chấm công">', 'content="' + htmlEsc(nm.slice(0, 24)) + '">'); if (lg) { const ext = lg[1] === 'jpeg' ? 'jpg' : lg[1] === 'svg+xml' ? 'svg' : lg[1]; html = html.replace('<link rel="icon" href="/icon.svg" type="image/svg+xml">', '<link rel="icon" href="/logo.' + ext + '">'); } html = html.replace('</head>', '<script>window.QTT_BR=' + brJs(c) + ';</script>\n</head>'); } // 16/11/2026: thương hiệu riêng
+      if (!isDemo(env, url)) { const c = await brCfg(env), lg = /^data:image\/(png|webp|jpeg|svg\+xml);base64,/.exec(c.br_logo || ''); if (lg) { const ext = lg[1] === 'jpeg' ? 'jpg' : lg[1] === 'svg+xml' ? 'svg' : lg[1]; html = html.replace('<link rel="icon" href="/icon.svg" type="image/svg+xml">', '<link rel="icon" href="/logo.' + ext + '">'); } html = html.replace('</head>', '<script>window.QTT_BR=' + brJs(c) + ';</script>\n</head>'); } // 16/11/2026: thương hiệu riêng
       // 08/11: thẻ chia sẻ (tiêu đề + ảnh) khi dán link bản chạy thử lên Facebook/Zalo – chỉ ở bản thử, máy chủ của công ty không có
       if (isDemo(env, url) && (route === 'ql' || route === 'nv')) {
         const og = route === 'ql'
           ? { t: 'Trang quản lý chấm công – bản chạy thử', d: 'Thiết lập mạng Wi‑Fi văn phòng, xem lượt chấm của nhân viên. Dữ liệu mẫu, dùng thử miễn phí – VIETCASA.', i: '/og-ql.jpg', u: '/quan-ly' }
           : { t: 'App cho nhân viên – bản chạy thử', d: 'Chấm công, xem công từng ngày, gửi đơn nghỉ cho quản lý duyệt, xem lương cả năm, hồ sơ của mình – ngay trên điện thoại. Dữ liệu mẫu, dùng thử miễn phí – VIETCASA.', i: '/og-nv.jpg?v=0511', u: '/' };
         const o = url.origin;
-        html = html.replace('<title>Chấm công</title>', '<title>' + og.t + '</title>\n<meta name="description" content="' + og.d + '">\n<meta property="og:type" content="website">\n<meta property="og:site_name" content="VIETCASA">\n<meta property="og:title" content="' + og.t + '">\n<meta property="og:description" content="' + og.d + '">\n<meta property="og:url" content="' + o + og.u + '">\n<meta property="og:image" content="' + o + og.i + '?v=0811">\n<meta property="og:image:width" content="1200">\n<meta property="og:image:height" content="630">\n<meta property="og:locale" content="vi_VN">\n<meta name="twitter:card" content="summary_large_image">');
+        html = html.replace('<title>HRM-VCS</title>', '<title>HRM-VCS</title>\n<meta name="description" content="' + og.d + '">\n<meta property="og:type" content="website">\n<meta property="og:site_name" content="VIETCASA">\n<meta property="og:title" content="' + og.t + '">\n<meta property="og:description" content="' + og.d + '">\n<meta property="og:url" content="' + o + og.u + '">\n<meta property="og:image" content="' + o + og.i + '?v=0811">\n<meta property="og:image:width" content="1200">\n<meta property="og:image:height" content="630">\n<meta property="og:locale" content="vi_VN">\n<meta name="twitter:card" content="summary_large_image">');
       }
       return withMay(new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...SEC } }));
     } catch (e) {
