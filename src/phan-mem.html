@@ -10619,6 +10619,29 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (c.type === 'work') { if (c.cong == null) c.cong = c.kind === 'half' ? Math.min(w, 0.5) : w; }
     else { c.cong = 0; if (c.type === 'paid' || c.type === 'hol') c.paid = c.kind === 'half' ? Math.min(w, 0.5) : w; else if (c.type === 'bh') c.bh = 1; else if (c.type === 'unpaid') c.unpaid = 1; }
   }
+  function bcTrunc(v, n) { var m = Math.pow(10, n); return Math.trunc((+v || 0) * m) / m; }
+  function bcHoursTxt(v) { return v == null ? '' : bcTrunc(v, 2).toFixed(2); }
+  function bcWorkTxt(v) { return bcTrunc(v, 3).toFixed(3); }
+  function bcStdTxt(v) { return String(bcTrunc(v, 3)); }
+  function bcWorkRatio(sum) { return bcWorkTxt(sum.work) + '/' + bcStdTxt(sum.stdDays || 0); }
+  function bcRequestWaiver(xday, k, actual, nominal) {
+    var d = xday && xday[k]; if (!d || d.trang_thai !== 'Đã duyệt' || actual <= 0) return 0;
+    var requested = Math.max(0, +d.phut || 0), at = ccMin(d.gio);
+    if (at !== null) requested = Math.max(requested, Math.abs(at - nominal));
+    if (!requested && at === null) requested = actual;
+    return Math.min(actual, requested);
+  }
+  function bcExactHours(sh, tin, tout, waiverLate, waiverEarly, kind) {
+    var i = shiftInfo(sh), ti = ccMin(tin), to = ccMin(tout); if (ti === null || to === null) return null;
+    if (i && i.night) { if (ti < i.a - 360) ti += 1440; if (to <= ti) to += 1440; } else if (to < ti) to += 1440;
+    var a = i ? i.a : ti, b = i ? (kind === 'half' && i.ba !== null ? i.ba : i.b) : to, cap = kind === 'half' && i ? Math.min(4, i.full / 2) : 8;
+    var lateIn = Math.max(0, ti - a), earlyIn = Math.max(0, a - ti), lateOut = Math.max(0, to - b), earlyOut = Math.max(0, b - to);
+    lateIn = Math.max(0, lateIn - (+waiverLate || 0)); earlyOut = Math.max(0, earlyOut - (+waiverEarly || 0));
+    var shortfall = Math.max(0, lateIn + earlyOut - earlyIn - lateOut);
+    if (shortfall <= 5 || (lateIn > 0 && lateOut > 0 && lateIn - lateOut <= 5) || (earlyIn > 0 && earlyOut > 0 && earlyOut - earlyIn <= 5)) return bcTrunc(cap, 2);
+    var brk = i && i.brk ? i.brk : (i && i.full >= 6 ? 60 : 0), mins = Math.max(0, to - ti + (+waiverLate || 0) + (+waiverEarly || 0) - brk);
+    return bcTrunc(Math.min(cap, mins / 60), 2);
+  }
   function bcSessionCalc(s, sh, file, session, who, R) {
     var i = shiftInfo(sh); if (!i) return null; var a = i.a, b = i.b, ca = i.ba, cb = i.bb;
     if (ca == null || cb == null || cb <= ca) { ca = cb = Math.round((a + b) / 2); }
@@ -10650,7 +10673,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     ppl.forEach(function (p) {
       p.sh = ccShiftOf(s, p.dept, p.id); p.exc = ccExc(s, p.id, p.dept, p.e); p.days = {}; p.lc = LC.d[p.id] || null; // 11/11: ca đã xếp theo ngày (Lịch xếp ca)
       var R = p.exc.sch ? s.ruleSx : s.rule; // 11/11 09:12: khối sản xuất có quy định tính công riêng
-      var S0 = p.sum = { work: 0, paid: 0, hol: 0, bh: 0, unpaid: 0, vang: 0, issues: 0, late: 0, lateMin: 0, early: 0, earlyMin: 0, otN: 0, otR: 0, otH: 0, otPay: 0, otWait: 0, otNo: 0, manual: 0, std: 0, fileOt: 0, hours: 0, hDays: 0, codes: {}, night: 0, otNx: 0, otNtH: 0, ca: {}, hBy: {}, hPaid: 0, sched: 0, unsch: 0, calD: 0, holD: 0, schH: 0, extraH: 0, stdH: 0, totH: 0 };
+      var S0 = p.sum = { work: 0, paid: 0, hol: 0, bh: 0, unpaid: 0, vang: 0, issues: 0, late: 0, lateMin: 0, early: 0, earlyMin: 0, otN: 0, otR: 0, otH: 0, otPay: 0, otWait: 0, otNo: 0, manual: 0, std: 0, stdDays: 0, attHours: 0, fileOt: 0, hours: 0, hDays: 0, codes: {}, night: 0, otNx: 0, otNtH: 0, ca: {}, hBy: {}, hPaid: 0, sched: 0, unsch: 0, calD: 0, holD: 0, schH: 0, extraH: 0, stdH: 0, totH: 0 };
       var synAll = u.source === 'sample' && p.exc.sch; // dữ liệu mẫu: người xếp ca không có file chấm công → tự sinh lượt chấm theo ca đã xếp
       days.forEach(function (iso) {
         var dsh = p.sh, lv = p.lc ? p.lc[iso] : '', K = null, unsch = false;
@@ -10662,6 +10685,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         else if (p.exc.sch && K.k !== 'hol') { K = { k: 'rest', h: null }; unsch = true; }
         var dd = iso.slice(8, 10), c = { iso: iso, dd: dd, kind: K.k, hol: K.h, k: '', cong: null, tin: '', tout: '', late: 0, early: 0, otRaw: 0, ot: 0, otWait: false, otOk: false, src: '', issue: '', note: [], file: null, don: null, sh: dsh, lc: lv || '', unsch: unsch, night: 0, otNt: 0 };
         if ((p.join && iso < p.join) || (p.left && iso > p.left)) { c.src = 'out'; p.days[dd] = c; return; }
+        if (c.kind === 'work') S0.stdDays += 1; else if (c.kind === 'half') S0.stdDays += 0.5;
         if (!p.exc.hr) { if (c.kind === 'work') S0.std += 1; else if (c.kind === 'half') S0.std += 0.5; }
         var fr = byKey[p.id + '|' + iso], dn = (dons[p.id] || []).filter(function (d) { return d.from <= iso && iso <= d.to; })[0];
         var lcd = lv && lv !== 'N' && LC_SP0.indexOf(lv) >= 0 ? bcCode(s, lv) : null; /* 11/11 12:24: mọi ký hiệu nghỉ / công tác xếp trên lịch (theo Ký hiệu công) */ if (!dn && lcd) { dn = { code: lv, from: iso, to: iso, so: '', t: (lcd.t || lv) + ' (lịch xếp ca)', lich: 1 }; c.note.push('Lịch xếp ca ghi ' + lv + ' – ' + (lcd.t || '') + (lcd.don ? ' – nên có đơn nghỉ đã duyệt' : '')); }
@@ -10740,7 +10764,27 @@ if (typeof module !== 'undefined') module.exports = XW;
         // 11/11: người toàn thời gian tính lương theo giờ thực tế – giờ làm trong ca (không tính đến sớm, về muộn; phần vượt ca đi theo quy tắc tăng ca), làm tròn như bán thời gian
         if (p.exc.hw) { c.hours = null; var hk = c.kind === 'work' || c.kind === 'half' || (c.kind === 'rest' && !R.restIsOt); if (c.type === 'work' && hk && c.wk == null && (c.cong || 0) > 0 && dsh && shiftInfo(dsh)) { c.hours = Math.round(c.cong * shiftInfo(dsh).full * 100) / 100; c.note.push('Ký hiệu ' + c.k + ': tính ' + ccNum(c.hours) + ' giờ theo ca ' + dsh.id); }
           else if (c.type === 'work' && hk && c.wk != null) { c.hours = Math.round(ccRoundMin(Math.round(c.wk * 60), R) / 60 * 100) / 100; if (c.hours > 0) c.note.push('Tính lương theo giờ thực tế: ' + ccNum(c.hours) + ' giờ trong ca ' + (dsh ? dsh.id : '') + ' (' + ccRoundTxt(R) + ')'); else c.hours = null; } if (((c.type === 'paid' || c.type === 'hol') && c.paid) || c.mixPaid) { var shi = dsh ? shiftInfo(dsh) : null, ph = Math.round((c.paid || c.mixPaid) * (shi ? shi.full : 8) * 100) / 100; S0.hPaid += ph; c.note.push('Nghỉ có hưởng lương ' + ccNum(ph) + ' giờ theo ca ' + (dsh ? dsh.id : '')); } }
-        if (p.exc.hr && c.hours != null) { c.cong = 0; S0.hours += c.hours; S0.hDays++; if (p.exc.hw && dsh) { if (dsh.parts) { var pf = dsh.parts.map(function (q) { return (shiftInfo(q) || { full: 0 }).full; }), pt = pf[0] + pf[1] || 1; dsh.parts.forEach(function (q, j) { S0.hBy[q.id] = (S0.hBy[q.id] || 0) + c.hours * pf[j] / pt; }); } else S0.hBy[dsh.id] = (S0.hBy[dsh.id] || 0) + c.hours; } }
+        if (mm) {
+          c.workHours = c.type === 'work' ? bcTrunc(Math.max(0, +c.cong || 0) * 8, 2) : 0;
+        } else if (c.type === 'work') {
+          var punchIn = ccMin(c.tin), punchOut = ccMin(c.tout), bothPunches = punchIn !== null && punchOut !== null;
+          if (workDay && p.exc.nc && !halfReq) { c.workHours = 8; if (tripRows.length) { c.k = 'X'; c.cong = 1; c.issue = ''; } }
+          else if (workDay && tripRows.length) {
+            var tripCredit = Math.min(8, tripRows.length * 4), punchCredit = bothPunches ? (bcExactHours(dsh, c.tin, c.tout, 0, 0, c.kind) || 0) : 0;
+            c.workHours = bothPunches ? Math.min(8, punchCredit + tripCredit) : tripCredit;
+            c.workHours = bcTrunc(c.workHours, 2); c.cong = bcTrunc(c.workHours / 8, 3); c.k = c.workHours >= 8 ? 'X' : 'X/2'; c.issue = '';
+          } else if (workDay && halfReq) {
+            c.workHours = bcTrunc(Math.min(4, p.exc.nc ? 4 : Math.max(0, other && other.worked || 0)), 2);
+          } else if (workDay && p.exc.nc) c.workHours = 8;
+          else if (bothPunches) {
+            var exactInfo = shiftInfo(dsh), nominalIn = exactInfo ? exactInfo.a : punchIn, nominalOut = exactInfo ? (c.kind === 'half' && exactInfo.ba !== null ? exactInfo.ba : exactInfo.b) : punchOut;
+            var actualLate = Math.max(0, punchIn - nominalIn), actualEarly = Math.max(0, nominalOut - punchOut), waiveLate = bcRequestWaiver(xday, 'muon', actualLate, nominalIn), waiveEarly = bcRequestWaiver(xday, 'som', actualEarly, nominalOut);
+            c.workHours = bcExactHours(dsh, c.tin, c.tout, waiveLate, waiveEarly, c.kind);
+          } else if (c.cong > 0) c.workHours = bcTrunc(c.cong * 8, 2);
+        }
+        if (c.workHours == null && ['paid', 'hol', 'bh', 'unpaid'].indexOf(c.type) >= 0) c.workHours = 0;
+        if (c.workHours != null) { c.workHours = bcTrunc(c.workHours, 2); S0.attHours += c.workHours; if (p.exc.hr && c.type === 'work') c.hours = c.workHours; }
+        if (p.exc.hr && c.type === 'work' && c.hours != null) { c.cong = 0; S0.hours += c.hours; S0.hDays++; if (p.exc.hw && dsh) { if (dsh.parts) { var pf = dsh.parts.map(function (q) { return (shiftInfo(q) || { full: 0 }).full; }), pt = pf[0] + pf[1] || 1; dsh.parts.forEach(function (q, j) { S0.hBy[q.id] = (S0.hBy[q.id] || 0) + c.hours * pf[j] / pt; }); } else S0.hBy[dsh.id] = (S0.hBy[dsh.id] || 0) + c.hours; } }
         if (p.exc.hr && !p.exc.hw && c.tin && c.tout && c.hours != null && !c.mixAttendance) { var t1 = ccMin(c.tin), t2 = ccMin(c.tout); if (t2 <= t1) t2 += 1440; var hi = dsh ? shiftInfo(dsh) : null; c.night = Math.min(c.hours, ccNightI(t1, t2, hi) / 60); }
         if (c.lc && c.lc !== 'N') S0.sched++; if (c.unsch && !c.guess) S0.unsch++;
         if (dsh && ((c.cong || 0) > 0 || (c.hours || 0) > 0 || (c.type === 'work' && c.ot > 0))) (dsh.parts || [dsh]).forEach(function (q) { S0.ca[q.id] = (S0.ca[q.id] || 0) + 1; });
@@ -10760,7 +10804,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (lock && c.manual && c.manual.after) c.after = true;
         p.days[dd] = c;
       });
-      S0.salary = S0.work + S0.paid + S0.hol;
+      S0.work = bcTrunc(S0.attHours / 8, 3); S0.salary = bcTrunc(S0.work + S0.paid + S0.hol, 3);
       if (p.exc.sch) bcSxMonth(p, S0, R, days.length);
     });
     var res = { key: key, ym: ym, u: u, s: s, days: days, ppl: ppl, dataEnd: dataEnd, hasFile: rows.length > 0, lock: lock };
@@ -10803,8 +10847,44 @@ if (typeof module !== 'undefined') module.exports = XW;
     return { 'Giờ vào': ccHM(tin), 'Giờ ra': tout == null ? '' : ccHM(tout), 'Ký hiệu': '', 'Giờ tăng ca': '', 'Đi muộn (phút)': '', 'Ghi chú': 'Dữ liệu mẫu tự sinh (sau ngày chốt mẫu ' + HR.vnDate(SAMPLE_REF) + ')' };
   }
   function bcMonths() { var o = {}; selUnits().forEach(function (u) { Object.keys(u.data.CC || {}).forEach(function (m) { o[m] = 1; }); }); o[refDate().slice(0, 7)] = 1; return Object.keys(o).sort(); }
-  function bcCellTxt(c) { return c.src === 'out' ? '' : c.hours != null ? ccNum(c.hours) + 'h' : (c.k || (c.inShift ? '…' : '')); }
+  function bcCellTxt(c) { return c.src === 'out' ? '' : c.hours != null ? bcHoursTxt(c.hours) + 'h' : (c.k || (c.inShift ? '…' : '')); }
   function bcNum(v) { return v ? ccNum(Math.round(v * 100) / 100) : '0'; }
+  function bcAutoLoad(u) {
+    if (!u) return; u.wf = u.wf || {}; if (u.wf.ccAutoLoaded || u.wf.ccAutoLoading || u.wf.ccAutoError || (!wfOn(u) && !wfDemoOn(u))) return;
+    u.wf.ccAutoLoading = true; var call = wfOn(u) ? function () { return wfCall(u, 'cong-tinh-cfg'); } : function () { return wfDemoGet('cong-tinh-cfg'); };
+    call().then(function (j) { u.wf.ccAuto = !!j.auto; u.wf.ccAutoLoaded = true; }, function () { u.wf.ccAutoError = true; }).then(function () { u.wf.ccAutoLoading = false; if (curPage === 'cc' && bcUnit() === u) render(); });
+  }
+  function bcCalcCall(u, path, body) { return wfOn(u) ? wfCall(u, path, body) : wfDemoOn(u) ? wfDemoGet(path, body) : Promise.reject(new Error('Kết nối máy chủ chấm công để lưu kết quả tính công vào D1.')); }
+  function wfCalcPull(u, ym, demo) {
+    var first = ym + '-01', last = bcDays(ym).slice(-1)[0], w = u.wf = u.wf || {}, nv = nvIndex(u), call = demo ? wfDemoGet : function (p, b) { return wfCall(u, p, b); };
+    return Promise.all([call('cham?tu=' + first + '&den=' + last), call('don?tu=' + first), call('xin-muon?tu=' + first)]).then(function (rs) {
+      w.punches = w.punches || {}; w.punches[ym] = rs[0].list.filter(function (x) { return !!nv[String(x.ma).toUpperCase()] && wfIso(x.t).slice(0, 7) === ym; });
+      var remote = {}, local = {}; rs[1].list.filter(function (x) { return nv[x.ma] && x.tu <= last && x.den >= first; }).forEach(function (x) { remote[x.so] = x; });
+      (u.data.DON || []).forEach(function (d) { if (d['Nguồn'] === 'Điện thoại' && String(d['Đến ngày'] || d['Từ ngày'] || '') >= first && String(d['Từ ngày'] || '') <= last) local[d['Số đơn']] = d; });
+      Object.keys(remote).forEach(function (so) {
+        var x = remote[so], d = local[so], e = nv[x.ma] || {}, n = wfDonFromApp(u, x, e);
+        if (!d) editRow(u, 'DON', so, n, 'nhận đơn ' + so + ' khi tính công tháng ' + HR.ymLabel(ym));
+        else if (wfDonChanged(d, n)) editRow(u, 'DON', so, { 'Loại nghỉ': n['Loại nghỉ'], 'Từ ngày': n['Từ ngày'], 'Đến ngày': n['Đến ngày'], 'Số ngày': n['Số ngày'], 'Buổi': n['Buổi'], _buoi: n._buoi, _lydo: n._lydo, _anh: n._anh, 'Lý do': n['Lý do'], 'Người duyệt': n['Người duyệt'], 'Ngày duyệt': n['Ngày duyệt'], 'Trạng thái': n['Trạng thái'], 'Lý do từ chối': n['Lý do từ chối'] }, 'cập nhật đơn ' + so + ' khi tính công tháng ' + HR.ymLabel(ym));
+      });
+      Object.keys(local).forEach(function (so) { if (!remote[so]) delRow(u, 'DON', so, 'xóa đơn ' + so + ' đã bị xóa trên máy chủ'); });
+      return xmPull(u, call, 'xin-muon?tu=' + first);
+    }).then(function () { bcX(u).v++; u._bc = {}; u._ccd = null; ACACHE.key = null; saveUnits(); });
+  }
+  function bcCalculateNow(u, ym) {
+    var demo = !wfOn(u) && wfDemoOn(u), ready = wfOn(u) || demo ? Promise.resolve() : Promise.reject(new Error('Kết nối máy chủ chấm công để lưu kết quả tính công vào D1.'));
+    return ready.then(function () { return wfCalcPull(u, ym, demo); }).then(function () {
+      bcX(u).v++; u._bc = {}; u._ccd = null; bcMonth(u, ym);
+      var X = bcX(u); return wfSendCong(u, ym, !X.lock[ym]).then(function (n) { u._bc = {}; u._ccd = null; saveUnits(); return n; });
+    });
+  }
+  function bcAutoProcess(u, j, currentYm) {
+    var months = Array.isArray(j.requestMonths) ? j.requestMonths.filter(function (m) { return /^\d{4}-\d{2}$/.test(m); }) : [];
+    if (j.auto && j.due) months.push(currentYm); months = [...new Set(months)].sort();
+    return months.reduce(function (chain, ym) { return chain.then(function (total) {
+      var data = wfCalcPull(u, ym, !wfOn(u));
+      return Promise.resolve(data).then(function () { var X = bcX(u); X.v++; u._bc = {}; u._ccd = null; return wfSendCong(u, ym, !X.lock[ym], ym === currentYm && j.due ? j.due : ''); }).then(function (n) { return total + (+n || 0); });
+    }); }, Promise.resolve(0));
+  }
 
   PAGES.cc = function () {
     if (!S.units.length) return pageHead('Tổng hợp công') + noData('dữ liệu chấm công');
@@ -10828,14 +10908,24 @@ if (typeof module !== 'undefined') module.exports = XW;
     // 17/11 đợt 2 (anh góp ý ảnh 6): gom bộ lọc thành 1 thanh gọn, báo cáo thành hàng tab, số liệu thành dải nhỏ – bảng công lên gần đầu trang
     var useg = uAll.length > 1 ? '<div class="seg">' + uAll.map(function (x) { return '<button class="' + (x.id === u0.id ? 'on' : '') + '" data-act="bc-u" data-id="' + x.id + '">' + esc(shortUnit(x.name)) + '</button>'; }).join('') + '</div>' : '';
     var kseg = '<div class="seg bc-kseg" role="tablist" title="Khối văn phòng: giờ hành chính · Khối sản xuất, vận hành: theo ca làm · Tất cả: 2 bảng tách riêng">' + [['vp', 'Văn phòng', NK.vp], ['sx', 'Sản xuất, vận hành', NK.sx], ['all', 'Tất cả', NK.vp + NK.sx]].map(function (k) { return '<button role="tab" aria-selected="' + (f.k === k[0]) + '" class="' + (f.k === k[0] ? 'on' : '') + '" data-act="bc-k" data-id="' + k[0] + '">' + k[1] + ' <small>' + k[2] + '</small></button>'; }).join('') + '</div>';
-    var tool = '<div class="bc-tool card">' + (useg ? '<div class="bc-trow">' + useg + '</div>' : '') +
+    bcAutoLoad(u0); var calcReady = wfOn(u0) || wfDemoOn(u0), calcAuto = !!(u0.wf && u0.wf.ccAuto), calcWait = !!(u0.wf && u0.wf.ccAutoLoading), calcMenu = '<div class="bc-trow"><details style="position:relative"><summary class="btn btn-sm btn-primary" style="list-style:none;cursor:pointer">Tính công ▾</summary><div style="position:absolute;right:0;top:100%;z-index:20;min-width:280px;padding:6px;background:var(--card,#fff);border:1px solid var(--line,#ddd);border-radius:8px;box-shadow:0 6px 18px #0002"><button type="button" class="btn btn-sm" style="display:block;width:100%;text-align:left" data-act="bc-calc-now"' + (calcReady ? '' : ' disabled title="Kết nối máy chủ chấm công để lưu vào D1"') + '>Tính công ngay</button><button type="button" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-auto" aria-pressed="' + calcAuto + '"' + (!calcReady || calcWait ? ' disabled' : '') + '>' + (calcAuto ? '☑ ' : '☐ ') + 'Tự động tính công (00:00 &amp; 12:00)' + (calcWait ? ' · đang đọc' : '') + '</button></div></details></div>';
+    var tool = '<div class="bc-tool card">' + (useg ? '<div class="bc-trow">' + useg + '</div>' : '') + calcMenu +
       '<div class="bc-trow bc-tf">' + (khoiBoth() ? '<div class="field"><label>Khối</label>' + kseg + '</div>' : '') + selectBox('bM', 'Tháng', ms.slice().reverse().map(function (m) { return [m, 'Tháng ' + HR.ymLabel(m)]; }), f.m) +
       selectBox('bDept', 'Phòng ban', [['', 'Tất cả phòng ban']].concat(res[0].ppl.filter(function (p) { return bcInK(p, f.k); }).map(function (p) { return p.dept; }).filter(function (d, i, A) { return d && A.indexOf(d) === i; }).map(function (d) { return [d, d]; })), f.dept) + searchBox('bQ', f.q) + '</div></div>';
     var vtabs = '<div class="bc-vt" role="tablist">' + [['grid', 'Bảng công'], ['sum', 'Tổng hợp'], ['late', 'Đi muộn' + (T.late ? ' (' + T.late + ')' : '')], ['ot', 'Tăng ca' + (T.otWait ? ' (' + ccNum(T.otWait) + 'h chờ)' : '')], ['issue', 'Cần xử lý' + (T.issues ? ' (' + T.issues + ')' : '')], ['xm', 'Đi muộn, về sớm, công tác'], ['log', 'Nhật ký sửa']].map(function (v) { return '<button role="tab" aria-selected="' + (f.view === v[0]) + '" class="' + (f.view === v[0] ? 'on' : '') + (v[0] === 'issue' && T.issues ? ' bad' : '') + '" data-act="bc-view" data-id="' + v[0] + '">' + v[1] + '</button>'; }).join('') + '</div>';
-    var kpi = '<div class="bc-kp"><span>Số người <b>' + T.n + '</b></span><span>Ngày công <b>' + bcNum(T.work) + '</b></span><span>Nghỉ hưởng lương (phép, lễ) <b>' + bcNum(T.paid) + '</b></span><span>Tăng ca được tính <b>' + (T.ot ? bcNum(T.ot) : 0) + ' giờ</b></span>' + (T.hours ? '<span>Giờ làm (tính lương theo giờ) <b>' + bcNum(T.hours) + ' giờ</b></span>' : '') + (T.night ? '<span>Giờ làm đêm <b>' + bcNum(T.night) + ' giờ</b></span>' : '') +
+    var kpi = '<div class="bc-kp"><span>Số người <b>' + T.n + '</b></span><span>Ngày công <b>' + bcWorkTxt(T.work) + '</b></span><span>Nghỉ hưởng lương (phép, lễ) <b>' + bcNum(T.paid) + '</b></span><span>Tăng ca được tính <b>' + (T.ot ? bcNum(T.ot) : 0) + ' giờ</b></span>' + (T.hours ? '<span>Giờ làm (tính lương theo giờ) <b>' + bcNum(T.hours) + ' giờ</b></span>' : '') + (T.night ? '<span>Giờ làm đêm <b>' + bcNum(T.night) + ' giờ</b></span>' : '') +
       (otMode || T.otWait ? '<span class="' + (T.otWait ? 'k-warn' : '') + '">Tăng ca chờ xác nhận <b>' + (T.otWait ? bcNum(T.otWait) : 0) + ' giờ</b></span>' : '') + '<span class="' + (T.issues ? 'k-bad' : '') + '">Ô cần xử lý <b>' + T.issues + '</b></span><span>Ô sửa tay <b>' + T.manual + '</b></span></div>';
     return pageHead('Tổng hợp công', 'Tự tính theo Thiết lập chấm công (<a href="#tlvp">khối văn phòng</a>, <a href="#tlsx">khối sản xuất</a>) · ' + esc(src)) + tool + lockBar + vtabs + kpi +
       '<div id="bArea"></div>';
+  };
+  ACTS['bc-calc-now'] = function (a) {
+    if (!pqAct('cc')) return; var u = bcUnit(), ym = (PS.bc || {}).m; if (!u || !ym) return;
+    if (a) a.disabled = true; toast('Đang tính công tháng ' + HR.ymLabel(ym) + '…', 'info');
+    bcCalculateNow(u, ym).then(function () { toast('Đã tính và lưu công tháng ' + HR.ymLabel(ym) + ' vào D1', 'ok'); render(); }, function (er) { toast('Chưa tính công được', 'err', er.message || 'Kiểm tra kết nối máy chủ.'); render(); });
+  };
+  ACTS['bc-calc-auto'] = function () {
+    if (!pqAct('cc')) return; var u = bcUnit(); if (!u) return; u.wf = u.wf || {}; var next = !u.wf.ccAuto;
+    bcCalcCall(u, 'cong-tinh-cfg', { auto: next }).then(function (j) { u.wf.ccAuto = !!j.auto; u.wf.ccAutoLoaded = true; u.wf.ccAutoError = false; saveUnits(); render(); toast(j.auto ? 'Đã bật tự động tính công' : 'Đã tắt tự động tính công', 'ok', j.auto ? 'Máy chủ đặt lượt tính lúc 00:00 và 12:00 khi có phiên quản trị đang hoạt động.' : 'Thiết lập đã lưu trên máy chủ.'); }, function (er) { toast('Chưa lưu được lịch tính công', 'err', er.message || 'Kiểm tra kết nối máy chủ.'); });
   };
   ACTS['bc-view'] = function (a, id) { PS.bc.view = id; render(); };
   ACTS['bc-u'] = function (a, id) { PS.bc.u = id; PS.bc.dept = ''; render(); };
@@ -10859,7 +10949,7 @@ if (typeof module !== 'undefined') module.exports = XW;
           var bs = bsOf(x.u, p.id, iso), c = p.days[iso.slice(8, 10)], cls = (bs ? 'bs ' : '') + 'bc-c k-' + c.kind + (iso === refDate() ? ' today' : '') + (c.src === 'out' ? ' out' : '') + (c.type ? ' t-' + c.type : '') + (c.issue ? ' iss' : '') + (c.manual ? ' man' : '') + (c.otWait ? ' wait' : '') + (c.after ? ' aft' : '');
           var tip = HR.vnDate(c.iso) + ' · ' + BC_DAYK[c.kind] + (c.lc ? ' · lịch: ' + (c.lc === 'N' ? 'nghỉ' : 'ca ' + c.lc) : c.unsch ? ' · chưa xếp ca' : '') + (c.night ? ' · đêm ' + ccNum(Math.round(c.night * 100) / 100) + 'h' : '') + (c.k ? ' · ' + c.k : '') + (c.tin || c.tout ? ' · ' + (c.tin || '?') + '–' + (c.tout || '?') : '') + (c.otRaw ? ' · tăng ca ' + ccNum(c.otRaw) + 'h' + (c.otWait ? ' chờ xác nhận' : !c.ot ? ' không tính' : '') : '') + (c.issue ? ' · ' + BC_ISSUE[c.issue] : '') + (c.manual ? ' · sửa tay' : '') + (bs ? ' · NHÂN VIÊN BÁO SAI: ' + bs.nd : '');
           return '<td class="' + cls + '">' + (c.src === 'out' ? '' : '<button type="button" data-act="bc-cell" data-id="' + x.u.id + '|' + esc(p.id) + '|' + c.dd + '" title="' + esc(tip) + '">' + esc(bcCellTxt(c) === '?' ? '?' : bcCellTxt(c)) + (p.exc.sch && c.lc ? '<b class="bc-ca">' + esc(c.lc === 'N' ? 'nghỉ' : c.lc) + '</b>' : '') + (function () { var la = c.manual && c.auto ? (c.manual.lateAuto != null ? +c.manual.lateAuto : +c.auto.late || 0) : 0; if (c.manual && la > (c.late || 0)) return '<i class="lt lt-x" title="Đi muộn ' + la + ' phút – sửa tay còn ' + (c.late || 0) + ' phút' + (c.manual.why ? ': ' + esc(c.manual.why) : '') + '"><s>' + la + 'p</s>' + (c.late ? ' ' + c.late + 'p' : '') + '</i>'; return c.late ? '<i class="lt" title="Đi muộn ' + c.late + ' phút">' + c.late + 'p</i>' : ''; })() + (c.otRaw ? '<i>' + ccNum(c.otRaw) + '</i>' : '') + '</button>') + '</td>';
-        }).join('') + (p.exc.sch ? '<td class="bc-t" title="Tổng giờ làm / giờ tiêu chuẩn tháng (' + esc(S0.stdF || '') + ')"><b>' + ccNum(Math.round(S0.totH * 100) / 100) + 'h</b><small>/' + ccNum(S0.stdH) + 'h</small></td>' : p.exc.hr ? '<td class="bc-t" title="Tính theo giờ: ' + S0.hDays + ' buổi"><b>' + ccNum(Math.round(S0.hours * 100) / 100) + 'h</b><small>' + S0.hDays + ' buổi</small></td>' : '<td class="bc-t"><b>' + ccNum(Math.round(S0.work * 100) / 100) + '</b><small>/' + ccNum(S0.std) + '</small></td>') + '<td class="bc-t">' + bcNum(S0.paid + S0.hol) + '</td><td class="bc-t' + (S0.late >= (+x.s.rule.lateTimes || 3) ? ' lt-w' : '') + '">' + (S0.lateMin ? '<b>' + S0.lateMin + 'p</b><small>' + S0.late + ' lần</small>' : '<span class="faint">0</span>') + '</td><td class="bc-t">' + (S0.earlyMin ? '<b>' + S0.earlyMin + 'p</b><small>' + S0.early + ' lần</small>' : '<span class="faint">0</span>') + '</td><td class="bc-t"><b>' + bcNum(S0.salary) + '</b></td></tr>';
+        }).join('') + '<td class="bc-t" title="Tổng giờ công chia 8; ngày chuẩn theo ca trong tháng"><b>' + bcWorkTxt(S0.work) + '</b><small>/' + bcStdTxt(S0.stdDays) + '</small></td><td class="bc-t">' + bcNum(S0.paid + S0.hol) + '</td><td class="bc-t' + (S0.late >= (+x.s.rule.lateTimes || 3) ? ' lt-w' : '') + '">' + (S0.lateMin ? '<b>' + S0.lateMin + 'p</b><small>' + S0.late + ' lần</small>' : '<span class="faint">0</span>') + '</td><td class="bc-t">' + (S0.earlyMin ? '<b>' + S0.earlyMin + 'p</b><small>' + S0.early + ' lần</small>' : '<span class="faint">0</span>') + '</td><td class="bc-t"><b>' + bcWorkTxt(S0.salary) + '</b></td></tr>';
     }).join('');
     var codes = s0.codes.map(function (c) { return '<span><span class="code ' + (CC_TYPE_CLS[c.type] || '') + '">' + esc(c.k) + '</span>' + esc(c.t.replace(/\s*\(.*\)$/, '')) + '</span>'; }).join('');
     return '<div class="legend bc-leg">' + codes + '<span><span class="code bc-q">?</span>Cần xử lý</span><span><i class="bc-mk man"></i>Sửa tay</span><span><b class="bc-lt-k">12p</b>Số phút đi muộn</span><span><i class="bc-mk wait"></i>Tăng ca chờ xác nhận</span><span><i class="bc-mk hol"></i>Lễ, tết</span><span><i class="bc-mk rest"></i>Nghỉ hằng tuần</span></div>' +
@@ -10869,20 +10959,20 @@ if (typeof module !== 'undefined') module.exports = XW;
   ACTS['bc-export'] = function () {
     var f = PS.bc, rows = bcRows(), days = bcDays(f.m);
     var cols = (isMulti() ? [{ t: 'Đơn vị', f: function (x) { return x.u.name; } }] : []).concat([{ t: 'Mã NV', f: function (x) { return x.p.id; } }, { t: 'Họ và tên', f: function (x) { return x.p.name; } }, { t: 'Phòng ban', f: function (x) { return x.p.dept; } }, { t: 'Ca', f: function (x) { return x.p.sh ? x.p.sh.id : ''; } }])
-      .concat(days.map(function (iso) { return { t: iso.slice(8, 10), f: function (x) { var c = x.p.days[iso.slice(8, 10)]; return c.src === 'out' ? '' : (c.hours != null ? ccNum(c.hours) + 'h' : c.k) + (c.late ? ' muộn ' + c.late + 'p' : '') + (c.otRaw ? ' +' + ccNum(c.otRaw) + 'h' : ''); } }; }))
-      .concat([{ t: 'Công chuẩn', f: function (x) { return x.p.sum.std; } }, { t: 'Ngày công', f: function (x) { return x.p.sum.work; } }, { t: 'Giờ làm (theo giờ)', f: function (x) { return x.p.exc.hr ? Math.round(x.p.sum.hours * 100) / 100 : ''; } }, { t: 'Loại lao động', f: function (x) { return x.p.e ? ldOf(x.p.e) : ''; } }, { t: 'Nghỉ phép, việc riêng', f: function (x) { return x.p.sum.paid; } }, { t: 'Lễ, tết', f: function (x) { return x.p.sum.hol; } }, { t: 'BHXH (ốm, thai sản)', f: function (x) { return x.p.sum.bh; } }, { t: 'Không lương', f: function (x) { return x.p.sum.unpaid; } },
-        { t: 'Đi muộn (lần)', f: function (x) { return x.p.sum.late; } }, { t: 'Đi muộn (phút)', f: function (x) { return x.p.sum.lateMin; } }, { t: 'Về sớm (phút)', f: function (x) { return x.p.sum.earlyMin; } }, { t: 'Tổng công hưởng lương', f: function (x) { return x.p.sum.salary; } }, { t: 'Tăng ca ngày thường (giờ)', f: function (x) { return x.p.sum.otN; } }, { t: 'Tăng ca nghỉ tuần (giờ)', f: function (x) { return x.p.sum.otR; } }, { t: 'Tăng ca lễ tết (giờ)', f: function (x) { return x.p.sum.otH; } }, { t: 'Tăng ca quy đổi (giờ lương)', f: function (x) { return Math.round(x.p.sum.otPay * 100) / 100; } }, { t: 'Tăng ca chờ xác nhận (giờ)', f: function (x) { return x.p.sum.otWait; } }, { t: 'Giờ làm ban đêm (giờ)', f: function (x) { return Math.round(x.p.sum.night * 100) / 100; } }, { t: 'Tăng ca ban đêm (giờ)', f: function (x) { return Math.round(x.p.sum.otNtH * 100) / 100; } }]);
+      .concat(days.map(function (iso) { return { t: iso.slice(8, 10), f: function (x) { var c = x.p.days[iso.slice(8, 10)]; return c.src === 'out' ? '' : (c.workHours != null ? bcHoursTxt(c.workHours) + 'h' : c.k) + (c.k ? ' ' + c.k : '') + (c.late ? ' muộn ' + c.late + 'p' : '') + (c.otRaw ? ' +' + ccNum(c.otRaw) + 'h' : ''); } }; }))
+      .concat([{ t: 'Công', f: function (x) { return bcWorkRatio(x.p.sum); } }, { t: 'Giờ làm (theo giờ)', f: function (x) { return x.p.exc.hr ? bcTrunc(x.p.sum.hours, 2) : ''; } }, { t: 'Loại lao động', f: function (x) { return x.p.e ? ldOf(x.p.e) : ''; } }, { t: 'Nghỉ phép, việc riêng', f: function (x) { return x.p.sum.paid; } }, { t: 'Lễ, tết', f: function (x) { return x.p.sum.hol; } }, { t: 'BHXH (ốm, thai sản)', f: function (x) { return x.p.sum.bh; } }, { t: 'Không lương', f: function (x) { return x.p.sum.unpaid; } },
+        { t: 'Đi muộn (lần)', f: function (x) { return x.p.sum.late; } }, { t: 'Đi muộn (phút)', f: function (x) { return x.p.sum.lateMin; } }, { t: 'Về sớm (phút)', f: function (x) { return x.p.sum.earlyMin; } }, { t: 'Tổng công hưởng lương', f: function (x) { return bcWorkTxt(x.p.sum.salary); } }, { t: 'Tăng ca ngày thường (giờ)', f: function (x) { return x.p.sum.otN; } }, { t: 'Tăng ca nghỉ tuần (giờ)', f: function (x) { return x.p.sum.otR; } }, { t: 'Tăng ca lễ tết (giờ)', f: function (x) { return x.p.sum.otH; } }, { t: 'Tăng ca quy đổi (giờ lương)', f: function (x) { return Math.round(x.p.sum.otPay * 100) / 100; } }, { t: 'Tăng ca chờ xác nhận (giờ)', f: function (x) { return x.p.sum.otWait; } }, { t: 'Giờ làm ban đêm (giờ)', f: function (x) { return Math.round(x.p.sum.night * 100) / 100; } }, { t: 'Tăng ca ban đêm (giờ)', f: function (x) { return Math.round(x.p.sum.otNtH * 100) / 100; } }]);
     exportRows('Bang cong ' + HR.ymLabel(f.m), cols, rows, 'Ký hiệu theo Thiết lập chấm công · Về sớm = tổng phút trong tháng · "+2h" = giờ tăng ca');
   };
   function bcSum(rows) {
     if (rows.length && rows.every(function (x) { return x.p.exc.sch; })) return bcSumSx(rows);
     var c = (isMulti() ? [{ t: 'Đơn vị', f: function (x) { return shortUnit(x.u.name); } }] : []).concat([
       { t: 'Mã NV', f: function (x) { return x.p.id; }, mono: 1 }, { t: 'Họ và tên', f: function (x) { return x.p.name; }, h: function (x) { return personLink(x.u, x.p.id, x.p.name); }, cls: 'nowrap' }, { t: 'Phòng ban', f: function (x) { return x.p.dept; } },
-      { t: 'Công chuẩn', f: function (x) { return x.p.sum.std; }, r: 1, title: 'Số ngày làm việc theo ca trong tháng (trừ lễ tết, tính từ ngày vào làm)' },
-      { t: 'Ngày công', f: function (x) { return x.p.sum.work; }, r: 1 }, { t: 'Giờ làm (theo giờ)', f: function (x) { return x.p.exc.hr ? Math.round(x.p.sum.hours * 100) / 100 : ''; }, r: 1, title: 'Người tính lương theo giờ (bán thời gian, cộng tác viên, bộ phận tính theo giờ thực tế): tổng số giờ làm trong tháng' }, { t: 'Nghỉ phép, việc riêng', f: function (x) { return x.p.sum.paid; }, r: 1 }, { t: 'Lễ, tết', f: function (x) { return x.p.sum.hol; }, r: 1 },
+      { t: 'Công', f: function (x) { return bcWorkRatio(x.p.sum); }, h: function (x) { return '<b>' + bcWorkTxt(x.p.sum.work) + '</b><small>/' + bcStdTxt(x.p.sum.stdDays) + '</small>'; }, title: 'Tổng giờ công chia 8, hiển thị trên số ngày làm việc chuẩn theo ca trong tháng' },
+      { t: 'Giờ làm (theo giờ)', f: function (x) { return x.p.exc.hr ? bcTrunc(x.p.sum.hours, 2) : ''; }, r: 1, title: 'Người tính lương theo giờ (bán thời gian, cộng tác viên, bộ phận tính theo giờ thực tế): tổng số giờ làm trong tháng' }, { t: 'Nghỉ phép, việc riêng', f: function (x) { return x.p.sum.paid; }, r: 1 }, { t: 'Lễ, tết', f: function (x) { return x.p.sum.hol; }, r: 1 },
       { t: 'BHXH', f: function (x) { return x.p.sum.bh; }, r: 1, title: 'Nghỉ ốm, thai sản – hưởng chế độ BHXH' }, { t: 'Không lương', f: function (x) { return x.p.sum.unpaid; }, r: 1 },
       { t: 'Đi muộn', f: function (x) { return x.p.sum.late; }, r: 1, h: function (x) { var n = x.p.sum.late; return n >= (+x.s.rule.lateTimes || 3) ? '<span class="tag tag-warn" title="' + x.p.sum.lateMin + ' phút">' + n + '</span>' : n ? n + '<small class="faint"> · ' + x.p.sum.lateMin + 'p</small>' : '0'; } }, { t: 'Về sớm', f: function (x) { return x.p.sum.early; }, r: 1, h: function (x) { return x.p.sum.early ? x.p.sum.early + '<small class="faint"> · ' + x.p.sum.earlyMin + 'p</small>' : '0'; } },
-      { t: 'Tổng công hưởng lương', f: function (x) { return x.p.sum.salary; }, r: 1, h: function (x) { return '<b>' + nfmt(x.p.sum.salary) + '</b>'; }, title: 'Ngày công + nghỉ phép, việc riêng có lương + lễ tết' },
+      { t: 'Tổng công hưởng lương', f: function (x) { return bcWorkTxt(x.p.sum.salary); }, h: function (x) { return '<b>' + bcWorkTxt(x.p.sum.salary) + '</b>'; }, title: 'Công + nghỉ phép, việc riêng có lương + lễ tết' },
       { t: 'TC ngày thường', f: function (x) { return x.p.sum.otN; }, r: 1, title: 'Giờ tăng ca được tính · trả ' + (selUnits()[0] ? ccOf(selUnits()[0]).rule.otRateN : 150) + '%' }, { t: 'TC nghỉ tuần', f: function (x) { return x.p.sum.otR; }, r: 1 }, { t: 'TC lễ tết', f: function (x) { return x.p.sum.otH; }, r: 1 },
       { t: 'TC quy đổi', f: function (x) { return Math.round(x.p.sum.otPay * 100) / 100; }, r: 1, title: 'Giờ tăng ca × mức trả (150/200/300%) = số giờ lương' },
       { t: 'Chờ xác nhận', f: function (x) { return x.p.sum.otWait; }, r: 1, h: function (x) { return x.p.sum.otWait ? '<span class="tag tag-warn">' + nfmt(x.p.sum.otWait) + '</span>' : '<span class="faint">0</span>'; } },
@@ -10894,14 +10984,14 @@ if (typeof module !== 'undefined') module.exports = XW;
   // 11/11 09:56: khối sản xuất – tổng hợp theo giờ, tăng ca = tổng giờ − giờ tiêu chuẩn tháng
   function bcSumSx(rows) {
     var r2 = function (v) { return Math.round((v || 0) * 100) / 100; };
-    var c = [{ t: 'Mã NV', f: function (x) { return x.p.id; }, mono: 1 }, { t: 'Họ và tên', f: function (x) { return x.p.name; }, h: function (x) { return personLink(x.u, x.p.id, x.p.name); }, cls: 'nowrap' }, { t: 'Bộ phận', f: function (x) { return x.p.dept; } },
+    var c = [{ t: 'Mã NV', f: function (x) { return x.p.id; }, mono: 1 }, { t: 'Họ và tên', f: function (x) { return x.p.name; }, h: function (x) { return personLink(x.u, x.p.id, x.p.name); }, cls: 'nowrap' }, { t: 'Bộ phận', f: function (x) { return x.p.dept; } }, { t: 'Công', f: function (x) { return bcWorkRatio(x.p.sum); }, h: function (x) { return '<b>' + bcWorkTxt(x.p.sum.work) + '</b><small>/' + bcStdTxt(x.p.sum.stdDays) + '</small>'; } },
       { t: 'Tính giờ', f: function (x) { return x.p.exc.nc ? 'Theo lịch đã chốt' : 'Theo giờ chấm'; } },
       { t: 'Giờ tiêu chuẩn tháng', f: function (x) { return r2(x.p.sum.stdH); }, r: 1, title: 'Theo Quy định tính công khối sản xuất', h: function (x) { return '<span title="' + esc(x.p.sum.stdF || '') + '">' + nfmt(r2(x.p.sum.stdH)) + '</span>'; } },
       { t: 'Giờ trong ca', f: function (x) { return r2(x.p.sum.totH - x.p.sum.extraH); }, r: 1 }, { t: 'Giờ ngoài ca', f: function (x) { return r2(x.p.sum.extraH); }, r: 1, title: 'Ở lại sau giờ ra của ca, được ghi nhận' },
       { t: 'Tổng giờ làm', f: function (x) { return r2(x.p.sum.totH); }, r: 1, h: function (x) { return '<b>' + nfmt(r2(x.p.sum.totH)) + '</b>'; } },
       { t: 'Giờ vượt chuẩn (tăng ca)', f: function (x) { return r2(x.p.sum.otN); }, r: 1, h: function (x) { return x.p.sum.otOver ? '<span class="tag tag-bad" title="' + esc(x.p.sum.otOver) + '">⚠ ' + nfmt(r2(x.p.sum.otN)) + '</span>' : x.p.sum.otN ? '<span class="tag tag-warn">' + nfmt(r2(x.p.sum.otN)) + '</span>' : '<span class="faint">0</span>'; } },
       { t: 'Làm ngày lễ', f: function (x) { return r2(x.p.sum.otH); }, r: 1 }, { t: 'Nghỉ có lương (giờ)', f: function (x) { return r2(x.p.sum.hPaid); }, r: 1 }, { t: 'Không lương (ngày)', f: function (x) { return x.p.sum.unpaid; }, r: 1 },
-      { t: 'Giờ đêm', f: function (x) { return r2(x.p.sum.night); }, r: 1 }, { t: 'Đi muộn', f: function (x) { return x.p.sum.late; }, r: 1, h: function (x) { return x.p.sum.late ? x.p.sum.late + '<small class="faint"> · ' + x.p.sum.lateMin + 'p</small>' : '0'; } }, { t: 'Về sớm', f: function (x) { return x.p.sum.early; }, r: 1, h: function (x) { return x.p.sum.early ? x.p.sum.early + '<small class="faint"> · ' + x.p.sum.earlyMin + 'p</small>' : '0'; } }, { t: 'Tổng công hưởng lương', f: function (x) { return x.p.sum.salary; }, r: 1, h: function (x) { return '<b>' + nfmt(x.p.sum.salary) + '</b>'; }, title: 'Ngày công + nghỉ phép, việc riêng có lương + lễ tết' },
+      { t: 'Giờ đêm', f: function (x) { return r2(x.p.sum.night); }, r: 1 }, { t: 'Đi muộn', f: function (x) { return x.p.sum.late; }, r: 1, h: function (x) { return x.p.sum.late ? x.p.sum.late + '<small class="faint"> · ' + x.p.sum.lateMin + 'p</small>' : '0'; } }, { t: 'Về sớm', f: function (x) { return x.p.sum.early; }, r: 1, h: function (x) { return x.p.sum.early ? x.p.sum.early + '<small class="faint"> · ' + x.p.sum.earlyMin + 'p</small>' : '0'; } }, { t: 'Tổng công hưởng lương', f: function (x) { return bcWorkTxt(x.p.sum.salary); }, h: function (x) { return '<b>' + bcWorkTxt(x.p.sum.salary) + '</b>'; }, title: 'Công + nghỉ phép, việc riêng có lương + lễ tết' },
       { t: 'Chờ xác nhận (giờ)', f: function (x) { return x.p.sum.otWait; }, r: 1 }, { t: 'Cần xử lý', f: function (x) { return x.p.sum.issues; }, r: 1, h: function (x) { return x.p.sum.issues ? '<span class="tag tag-bad">' + x.p.sum.issues + '</span>' : '<span class="faint">0</span>'; } }, { t: 'Sửa tay', f: function (x) { return x.p.sum.manual; }, r: 1 }];
     return table('bc-ssx' + BC_SFX, c, rows, { title: 'Tong hop cong khoi san xuat ' + HR.ymLabel(PS.bc.m) });
   }
@@ -11033,7 +11123,7 @@ if (typeof module !== 'undefined') module.exports = XW;
 
   /* ----- Ô công: xem chi tiết, sửa tay, xác nhận tăng ca ----- */
   function bcFind(key) { var a = key.split('|'), u = unitById(a[0]); if (!u) return null; var r = bcMonth(u, PS.bc.m), p = r.ppl.filter(function (x) { return x.id === a[1]; })[0]; return p ? { u: u, r: r, p: p, c: p.days[a[2]], key: a[1] + '|' + a[2] } : null; }
-  function bcDesc(c) { return (c.k || '(trống)') + (c.cong ? ' · ' + ccNum(c.cong) + ' công' : '') + (c.tin || c.tout ? ' · ' + (c.tin || '?') + '–' + (c.tout || '?') : '') + (c.late ? ' · muộn ' + c.late + 'p' : '') + (c.early ? ' · về sớm ' + c.early + 'p' : '') + (c.otRaw ? ' · TC ' + ccNum(c.otRaw) + 'h' : ''); }
+  function bcDesc(c) { return (c.k || '(trống)') + (c.cong ? ' · ' + ccNum(c.cong) + ' công' : '') + (c.workHours != null ? ' · ' + bcHoursTxt(c.workHours) + ' giờ công' : '') + (c.tin || c.tout ? ' · ' + (c.tin || '?') + '–' + (c.tout || '?') : '') + (c.late ? ' · muộn ' + c.late + 'p' : '') + (c.early ? ' · về sớm ' + c.early + 'p' : '') + (c.otRaw ? ' · TC ' + ccNum(c.otRaw) + 'h' : ''); }
   function bcLogAdd(u, o) { var x = bcX(u); o.ts = Date.now(); o.at = nowVn(); o.by = o.by || bcEditor() || 'Quản lý'; o.after = !!x.lock[o.ym]; x.log.push(o); if (x.log.length > 3000) x.log = x.log.slice(-3000); }
   ACTS['bc-cell'] = function (a, key) {
     var F = bcFind(key); if (!F) return; var u = F.u, p = F.p, c = F.c, s = F.r.s, R = p.exc.sch ? s.ruleSx : s.rule, L = F.r.lock, ym = PS.bc.m;
@@ -11041,6 +11131,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var info = '<dl class="kv2 bc-kv"><dt>Ngày</dt><dd>' + ccDowT(c.iso) + ' ' + HR.vnDate(c.iso) + ' · <b>' + BC_DAYK[c.kind] + '</b>' + (c.hol ? ' – ' + esc(c.hol.t) : '') + '</dd><dt>Ca</dt><dd>' + ((c.sh || p.sh) ? esc((c.sh || p.sh).id + ' ' + (c.sh || p.sh).inT + '–' + (c.sh || p.sh).outT) : '–') + (c.lc ? ' · <span class="bc-tag">' + (c.lc === 'N' ? 'lịch xếp ca: nghỉ' : 'theo lịch xếp ca') + '</span>' : c.unsch ? ' · <span class="bc-tag">chưa xếp ca</span>' : '') + (p.exc.sch ? ' · <span class="bc-tag">khối sản xuất · công theo giờ · ' + (p.exc.hrf ? 'lương theo giờ' : 'lương tháng') + '</span>' : p.exc.hrf ? ' · <span class="bc-tag">lương theo giờ thực tế</span>' : p.exc.hr ? ' · <span class="bc-tag">' + (p.exc.ctv ? 'CTV · ' : 'bán thời gian · ') + 'theo giờ</span>' : p.exc.nc ? ' · <span class="bc-tag">miễn chấm công</span>' : p.exc.no ? ' · <span class="bc-tag">không tính tăng ca</span>' : '') + '</dd>' +
       '<dt>File chấm công</dt><dd>' + (c.file ? esc((c.file.k || '(trống)') + (c.file.tin || c.file.tout ? ' · ' + (c.file.tin || '?') + '–' + (c.file.tout || '?') : '') + (c.file.ot ? ' · TC ' + c.file.ot + 'h' : '') + (c.file.note ? ' · ' + c.file.note : '')) : '<span class="faint">Không có dòng</span>') + '</dd>' +
       '<dt>Đơn nghỉ</dt><dd>' + (c.don ? esc(c.don.t + ' · ' + HR.vnDate(c.don.from) + (c.don.to !== c.don.from ? '–' + HR.vnDate(c.don.to) : '') + (c.don.so ? ' · số ' + c.don.so : '')) : '<span class="faint">Không có đơn đã duyệt</span>') + '</dd>' +
+      '<dt>Giờ công</dt><dd>' + (c.workHours == null ? '<span class="faint">Chưa tính được</span>' : '<b>' + bcHoursTxt(c.workHours) + ' giờ</b>') + '</dd>' +
       '<dt>' + (c.manual ? 'Theo quy tắc' : 'Kết quả') + '</dt><dd>' + esc(bcDesc(c.manual ? Object.assign({}, c.auto, { otRaw: c.auto.ot, late: c.manual.lateAuto != null ? c.manual.lateAuto : c.auto.late }) : c)) + (c.issue ? ' · <span class="tag tag-bad">' + BC_ISSUE[c.issue] + '</span>' : '') + '</dd>' +
       (c.manual ? '<dt>Sửa tay</dt><dd>' + esc(bcDesc(c)) + ' <span class="faint">· ' + esc(c.manual.by + ' · ' + c.manual.at) + (c.manual.why ? ' · ' + c.manual.why : '') + '</span></dd>' : '') + '</dl>' +
       (c.note.length && !c.manual ? '<ul class="tl-notes">' + c.note.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : '') +
@@ -11211,7 +11302,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     r.ppl.forEach(function (p) { r.days.forEach(function (iso) {
       var c = p.days[iso.slice(8, 10)]; if (!c || c.src === 'out' || !c.k || c.k === '?') return;
       out.push({ 'Ngày': iso, 'Thứ': ccDowT(iso), 'Mã NV': p.id, 'Họ và tên': p.name, 'Phòng ban': p.dept, 'Tổ': p.e ? p.e['Tổ/Ca'] || '' : '', 'Ca': c.sh ? c.sh.id : p.sh ? p.sh.id : '', 'Giờ vào': c.tin || '', 'Giờ ra': c.tout || '',
-        'Số giờ công': c.hours != null ? c.hours : c.type === 'work' ? Math.round((c.cong || 0) * (p.sh ? (shiftInfo(p.sh) || { full: 8 }).full : 8) * 10) / 10 : '', 'Đi muộn (phút)': c.late || '', 'Giờ tăng ca': c.ot || '', 'Loại tăng ca': c.ot ? (c.otKind === 'H' ? 'Ngày lễ' : c.otKind === 'R' ? 'Ngày nghỉ' : 'Ngày thường') : '',
+        'Số giờ công': c.workHours != null ? bcTrunc(c.workHours, 2) : c.hours != null ? bcTrunc(c.hours, 2) : c.type === 'work' ? bcTrunc((c.cong || 0) * (p.sh ? (shiftInfo(p.sh) || { full: 8 }).full : 8), 2) : '', 'Đi muộn (phút)': c.late || '', 'Giờ tăng ca': c.ot || '', 'Loại tăng ca': c.ot ? (c.otKind === 'H' ? 'Ngày lễ' : c.otKind === 'R' ? 'Ngày nghỉ' : 'Ngày thường') : '',
         'Ký hiệu': c.k, 'Ghi chú': c.manual ? 'Sửa tay: ' + (c.manual.why || '') : (c.file && c.file.note) || '' });
     }); });
     return out;
@@ -11227,7 +11318,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   // bảng công hiện tại khác bản tổng lưu lúc chốt?
   function bcLockDiff(r) {
     if (!r.lock || !r.lock.sum) return []; var by = {}, out = []; r.lock.sum.forEach(function (x) { by[x.id] = x; });
-    r.ppl.forEach(function (p) { var o = by[p.id]; if (!o) return; var a = Math.round(p.sum.salary * 100), b = Math.round(o.salary * 100), c = Math.round((p.sum.otN + p.sum.otR + p.sum.otH) * 100), d = Math.round((o.otN + o.otR + o.otH) * 100); if (a !== b || c !== d) out.push(p.name); });
+    r.ppl.forEach(function (p) { var o = by[p.id]; if (!o) return; var a = Math.round(p.sum.salary * 1000), b = Math.round(o.salary * 1000), c = Math.round((p.sum.otN + p.sum.otR + p.sum.otH) * 100), d = Math.round((o.otN + o.otR + o.otH) * 100); if (a !== b || c !== d) out.push(p.name); });
     return out;
   }
 
@@ -11529,13 +11620,13 @@ if (typeof module !== 'undefined') module.exports = XW;
         return (byD[key] = { tuan: t, nua: nua, ca: sh ? (function () { var o = { ten: sh.name, vao: sh.inT, ra: sh.outT }, ng = {}; CC_DOW.forEach(function (w) { var dt = sh.dayT && sh.dayT[w[0]]; if (dt && t.indexOf(w[0]) >= 0) ng[w[0]] = { vao: dt.inT, ra: dt.outT }; }); if (Object.keys(ng).length) o.ngay = ng; if (+sh.pre) { o.som = +sh.pre; o.som_ngay = (sh.preDays && sh.preDays.length ? sh.preDays.map(Number) : [0, 1, 2, 3, 4, 5, 6]).filter(function (d) { return t.indexOf(d) >= 0; }); } return o; })() : null, sx: ccIsSxDept(s, dept) ? 1 : 0 }); /* 12/11 17:56: nua = thứ làm nửa ngày (app tô nửa xám) */ } };
   }
   window.ccAppExtra = ccAppExtra;
-  function wfCongOf(p, tam) { var S0 = p.sum, ng = {}, ct = {}; Object.keys(p.days).forEach(function (dd) { var c = p.days[dd]; if (c.src !== 'out' && c.k) ng[dd] = c.k; if (c.src !== 'out' && (c.tin || c.tout)) ct[dd] = [c.tin || '', c.tout || '', c.late || 0, c.early || 0, c.hours != null ? c.hours : null, c.otRaw || c.ot || 0]; }); var r2 = function (v) { return Math.round(v * 100) / 100; }; return { tam: !!tam, cong: r2(S0.work), phep: r2(S0.paid), le: r2(S0.hol), huong: r2(S0.salary), tc: r2(S0.otN + S0.otR + S0.otH), ngay: ng, ct: ct }; }
-  function wfSendCong(u, ym, tam) {
+  function wfCongOf(p, tam) { var S0 = p.sum, ng = {}, ct = {}; Object.keys(p.days).forEach(function (dd) { var c = p.days[dd]; if (c.src !== 'out' && c.k) ng[dd] = c.k; if (c.src !== 'out' && (c.tin || c.tout || c.workHours != null)) ct[dd] = [c.tin || '', c.tout || '', c.late || 0, c.early || 0, c.workHours != null ? bcTrunc(c.workHours, 2) : c.hours != null ? bcTrunc(c.hours, 2) : null, c.otRaw || c.ot || 0]; }); var r3 = function (v) { return bcTrunc(v, 3); }; return { tam: !!tam, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct }; }
+  function wfSendCong(u, ym, tam, slot) {
     var r = bcMonth(u, ym), ok = {}; wfPeople(u).forEach(function (x) { ok[x.ma] = 1; });
     var list = r.ppl.filter(function (p) { return ok[p.id]; }).map(function (p) { return { ma: p.id, du_lieu: wfCongOf(p, tam) }; });
     if (!list.length) return Promise.resolve(0);
     var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoOn(u) ? wfDemoGet : null; if (!call) return Promise.resolve(0);
-    return call('cong', { ym: ym, nguoi: ccUser(), list: list }).then(function (j) { if (!tam) { u.wf.sent = u.wf.sent || {}; u.wf.sent[ym] = (bcX(u).lock[ym] || {}).at || nowVn(); } return j.n; });
+    return call('cong', { ym: ym, nguoi: ccUser(), list: list, slot: slot || '' }).then(function (j) { if (!tam) { u.wf.sent = u.wf.sent || {}; u.wf.sent[ym] = (bcX(u).lock[ym] || {}).at || nowVn(); } return j.n; });
   }
   function wfPushPin(u, id, pin, e) {
     if (!wfOn(u)) return; e = e || nvIndex(u)[id] || {};
@@ -11601,9 +11692,22 @@ if (typeof module !== 'undefined') module.exports = XW;
     us.reduce(function (p, u) { return p.then(function () { return wfSync(u).then(function () { delete WF_AUTO.err[u.id]; if (curPage === 'ccwifi' && !document.querySelector('.modal-bg')) render(); }, function (er) { if (!WF_AUTO.err[u.id]) toast('Chưa tự đồng bộ được với máy chủ – ' + shortUnit(u.name), 'err', er.message + ' Phần mềm tự thử lại sau ít phút.'); WF_AUTO.err[u.id] = 1; }); }); }, Promise.resolve());
   }
   setTimeout(function () { wfAutoTick(true); setInterval(function () { wfAutoTick(false); }, 20000); }, 5000);
+  var BC_AUTO_POLL_AT = 0;
+  function bcAutoTick() {
+    if (!S || !S.units || !S.units.length || document.visibilityState !== 'visible' || Date.now() - BC_AUTO_POLL_AT < 5 * 60e3) return;
+    if (typeof SV !== 'undefined' && SV && !SV.me || typeof PQ !== 'undefined' && PQ.pv || S._pqView) return;
+    try { if (!pqAct('cc') && !pqAct('np')) return; } catch (e) { return; }
+    BC_AUTO_POLL_AT = Date.now(); var ym = HR.isoToday().slice(0, 7), us = S.units.filter(function (u) { return (wfOn(u) || wfDemoOn(u)) && !u._wfP; });
+    us.forEach(function (u) {
+      var demo = !wfOn(u), pull = demo ? function () { return wfDemoGet('cong-tinh?ym=' + ym); } : function () { return wfCall(u, 'cong-tinh?ym=' + ym); };
+      pull().then(function (j) { u.wf = u.wf || {}; u.wf.ccAuto = !!j.auto; u.wf.ccAutoLoaded = true; return bcAutoProcess(u, j, ym); }, function () { });
+    });
+  }
+  setInterval(bcAutoTick, 60000);
   function wfSync0(u) {
     var w = u.wf, today = HR.isoToday(), ymNow = today.slice(0, 7), y = +ymNow.slice(0, 4), m = +ymNow.slice(5, 7) - 1; if (m < 1) { m = 12; y--; }
-    var from = y + '-' + p2(m) + '-01', res = { nv: 0, pin: 0, cham: 0, don: 0, kq: 0, cong: 0 };
+    var from = y + '-' + p2(m) + '-01', reqChangedMonths = {}, res = { nv: 0, pin: 0, cham: 0, don: 0, kq: 0, cong: 0 };
+    function reqTouch(d) { var a = String(d['Từ ngày'] || d.ngay || d.tu || '').slice(0, 10), b = String(d['Đến ngày'] || d.den || a).slice(0, 10), cur = a, guard = 0; while (cur && cur <= b && guard++ < 400) { reqChangedMonths[cur.slice(0, 7)] = 1; cur = ccAdd(cur, 1); } }
     return wfCall(u, 'ping').then(function (j) { w.ten = j.ten_cty; w.ver = j.ver; w.cheDo = j.che_do; return wfCall(u, 'nhan-vien', { list: wfPeople(u) }); })
       .then(function (j) { res.nv = j.them + j.sua; w.noPin = j.chua_pin || []; return wfCall(u, 'cham?tu=' + from + '&den=' + today); })
       .then(function (j) {
@@ -11615,18 +11719,19 @@ if (typeof module !== 'undefined') module.exports = XW;
         var local = {}, up = [], nv = nvIndex(u), edited = false; (u.data.DON || []).forEach(function (d) { local[String(d['Số đơn'])] = d; });
         j.list.forEach(function (x) {
           var d = local[x.so];
-          if (!d) { if (x.trang_thai === 'Đã hủy' || !nv[x.ma]) return; var e = nv[x.ma] || {}; editRow(u, 'DON', x.so, wfDonFromApp(u, x, e), 'nhận đơn ' + x.so + ' gửi trên điện thoại'); res.don++; edited = true; return; }
-          if (d['Trạng thái'] === 'Chờ duyệt' && (x.trang_thai === 'Đã duyệt' || x.trang_thai === 'Từ chối')) { editRow(u, 'DON', x.so, { 'Trạng thái': x.trang_thai, 'Người duyệt': x.nguoi_duyet || '', 'Ngày duyệt': x.ngay_duyet || '', 'Lý do từ chối': x.ly_do_tc || '' }, 'quản lý trực tiếp ' + (x.trang_thai === 'Đã duyệt' ? 'duyệt' : 'từ chối') + ' đơn ' + x.so + ' trên điện thoại'); edited = true; return; }
-          if (x.trang_thai === 'Đã hủy' && d['Trạng thái'] === 'Chờ duyệt') { editRow(u, 'DON', x.so, { 'Trạng thái': 'Đã hủy' }, 'nhân viên hủy đơn ' + x.so + ' trên điện thoại'); edited = true; return; }
-          var remote = wfDonFromApp(u, x, nv[x.ma] || {}); if (x.trang_thai === d['Trạng thái'] && wfDonChanged(d, remote)) { editRow(u, 'DON', x.so, remote, 'cập nhật chi tiết đơn ' + x.so + ' từ máy chủ chấm công'); edited = true; }
+          if (!d) { if (x.trang_thai === 'Đã hủy' || !nv[x.ma]) return; var e = nv[x.ma] || {}, added = wfDonFromApp(u, x, e); editRow(u, 'DON', x.so, added, 'nhận đơn ' + x.so + ' gửi trên điện thoại'); reqTouch(added); res.don++; edited = true; return; }
+          if (d['Trạng thái'] === 'Chờ duyệt' && (x.trang_thai === 'Đã duyệt' || x.trang_thai === 'Từ chối')) { reqTouch(d); editRow(u, 'DON', x.so, { 'Trạng thái': x.trang_thai, 'Người duyệt': x.nguoi_duyet || '', 'Ngày duyệt': x.ngay_duyet || '', 'Lý do từ chối': x.ly_do_tc || '' }, 'quản lý trực tiếp ' + (x.trang_thai === 'Đã duyệt' ? 'duyệt' : 'từ chối') + ' đơn ' + x.so + ' trên điện thoại'); edited = true; return; }
+          if (x.trang_thai === 'Đã hủy' && d['Trạng thái'] === 'Chờ duyệt') { reqTouch(d); editRow(u, 'DON', x.so, { 'Trạng thái': 'Đã hủy' }, 'nhân viên hủy đơn ' + x.so + ' trên điện thoại'); edited = true; return; }
+          var remote = wfDonFromApp(u, x, nv[x.ma] || {}); if (x.trang_thai === d['Trạng thái'] && wfDonChanged(d, remote)) { reqTouch(d); reqTouch(remote); editRow(u, 'DON', x.so, remote, 'cập nhật chi tiết đơn ' + x.so + ' từ máy chủ chấm công'); edited = true; }
           if ((d['Trạng thái'] === 'Đã duyệt' || d['Trạng thái'] === 'Từ chối') && x.trang_thai !== d['Trạng thái']) up.push({ so: x.so, trang_thai: d['Trạng thái'], nguoi_duyet: d['Người duyệt'] || '', ngay_duyet: d['Ngày duyệt'] || '', ly_do_tc: d['Lý do từ chối'] || '', so_ngay: +d['Số ngày'] || null });
         });
         if (edited) ACACHE.key = null;
         return up.length ? wfCall(u, 'don-cap-nhat', { list: up }).then(function (k) { res.kq = k.n; }) : null;
       })
       .then(function () {
-        var X = bcX(u), jobs = [wfSendCong(u, ymNow, !X.lock[ymNow]).then(function (n) { res.cong += n; })];
-        Object.keys(X.lock).sort().slice(-2).forEach(function (ym) { if (ym === ymNow || !X.lock[ym].ts || X.lock[ym].ts < (w.since || 0)) return; if (!w.sent || w.sent[ym] !== X.lock[ym].at) jobs.push(wfSendCong(u, ym, false).then(function (n) { res.cong += n; })); });
+        var X = bcX(u), sentMonths = { [ymNow]: 1 }, jobs = [wfSendCong(u, ymNow, !X.lock[ymNow]).then(function (n) { res.cong += n; })];
+        Object.keys(reqChangedMonths).forEach(function (ym) { if (sentMonths[ym]) return; sentMonths[ym] = 1; jobs.push(wfSendCong(u, ym, !X.lock[ym]).then(function (n) { res.cong += n; })); });
+        Object.keys(X.lock).sort().slice(-2).forEach(function (ym) { if (sentMonths[ym] || !X.lock[ym].ts || X.lock[ym].ts < (w.since || 0)) return; if (!w.sent || w.sent[ym] !== X.lock[ym].at) jobs.push(wfSendCong(u, ym, false).then(function (n) { res.cong += n; })); });
         return Promise.all(jobs);
       })
       .then(function () { var X = bcX(u); return Promise.all(Object.keys(w.sent || {}).filter(function (ym) { return X.lock[ym]; }).map(function (ym) { return wfCall(u, 'cong-xac-nhan?ym=' + ym).then(function (j) { w.cong = w.cong || {}; var o = w.cong[ym] = {}; j.list.forEach(function (x) { o[x.ma] = { xn: x.xn, at: x.xn_at, ph: x.phan_hoi }; }); }); })); })
@@ -11636,6 +11741,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       .then(function () { return typeof vbAppSync === 'function' ? vbAppSync(u) : null; }) // 16/11: kho thông tin chung
       .then(function () { return typeof bcdAppSync === 'function' ? bcdAppSync(u) : null; }) // 16/11 13:29: gửi báo cáo định kỳ (ảnh chụp số liệu)
       .then(function () { return typeof hsAppSync === 'function' ? hsAppSync(u, function (p, b) { return wfCall(u, p, b); }, true).then(function (r) { if (r) { res.hs = r.hs; res.file = r.file; } }, function () { }) : null; })
+      .then(function () { return wfCall(u, 'cong-tinh?ym=' + ymNow).then(function (j) { return bcAutoProcess(u, j, ymNow).then(function (n) { res.cong += n || 0; }); }, function () { }); })
       .then(function () {
         w.at = nowVn(); bcX(u).v++; u._bc = {}; u._ccd = null;
         var t = 'Đồng bộ xong: ' + res.nv + ' nhân viên · ' + res.cham + ' lượt chấm · ' + res.don + ' đơn mới' + (res.xm ? ' · ' + res.xm + ' đơn đi muộn/về sớm mới hoặc đổi trạng thái' : '') + (res.kq ? ' · báo ' + res.kq + ' kết quả duyệt' : '') + ' · gửi công ' + res.cong + ' người'; if (res.lich) t += ' · gửi lịch ' + res.lich + ' ô'; if (res.hs) t += ' · gửi hồ sơ ' + res.hs + ' người'; if (res.file) t += ' · gửi ' + res.file + ' file kho'; if (res.dk) t += ' · nhận ' + res.dk + ' ô đăng ký ca'; if (res.bs) t += ' · ' + res.bs + ' ngày công nhân viên báo sai';
@@ -11686,16 +11792,20 @@ if (typeof module !== 'undefined') module.exports = XW;
   function xmPull(u, call, path) {
     var w = u.wf = u.wf || {}, nv = nvIndex(u);
     return call(path).then(function (j) {
-      var Q = w.xmQ = w.xmQ || {}, old = {}, up = [], n = 0; (w.xm || []).forEach(function (x) { old[x.so] = x; });
+      var Q = w.xmQ = w.xmQ || {}, old = {}, up = [], changed = [], seen = {}, n = 0; (w.xm || []).forEach(function (x) { old[x.so] = x; });
       var list = (j.list || []).filter(function (x) { return nv[x.ma]; }).map(function (x) { var q = Q[x.so]; if (q && x.trang_thai === 'Chờ duyệt') { up.push(Object.assign({ so: x.so }, q)); return Object.assign({}, x, q); } if (q) delete Q[x.so]; return x; });
-      list.forEach(function (x) { var o = old[x.so]; if (!o || o.trang_thai !== x.trang_thai) n++; }); w.xm = list; w.xmAt = nowVn();
-      if (n) { bcX(u).v++; u._bc = {}; }
-      return up.length ? call('xm-cap-nhat', { list: up }).then(function () { up.forEach(function (x) { delete Q[x.so]; }); return n; }, function () { return n; }) : n;
+      var from = /(?:\?|&)tu=(\d{4}-\d{2}-\d{2})/.exec(path); if (from) Object.keys(old).forEach(function (so) { if (String(old[so].ngay || '') < from[1] && !list.some(function (x) { return x.so === so; })) list.push(old[so]); });
+      list.forEach(function (x) { var o = old[x.so], diff = !o || ['ma', 'ngay', 'kieu', 'gio', 'phut', 'trang_thai', 'ly_do', 'ly_do_tc'].some(function (k) { return String(o[k] == null ? '' : o[k]) !== String(x[k] == null ? '' : x[k]); }) || JSON.stringify(o && o.anh || []) !== JSON.stringify(x.anh || []); seen[x.so] = 1; if (!o || o.trang_thai !== x.trang_thai) n++; if (diff) { if (o) changed.push(o); changed.push(x); } });
+      Object.keys(old).forEach(function (so) { if (!seen[so]) changed.push(old[so]); }); w.xm = list; w.xmAt = nowVn();
+      if (changed.length) { bcX(u).v++; u._bc = {}; u._ccd = null; }
+      var sent = up.length ? call('xm-cap-nhat', { list: up }).then(function () { up.forEach(function (x) { delete Q[x.so]; }); return n; }, function () { return n; }) : Promise.resolve(n);
+      return sent.then(function () { return changed.length ? wfRefreshRequest(u, changed, false).then(function () { return n; }, function () { return n; }) : n; });
     });
   }
   function xmDecide(u, so, ok, ly) { // duyệt / từ chối ở phần mềm → báo về máy chủ ngay; lỗi mạng thì gửi lại ở lần đồng bộ sau
     var w = u.wf = u.wf || {}, row = (w.xm || []).filter(function (x) { return x.so === so; })[0]; if (!row) return;
     var d = { trang_thai: ok ? 'Đã duyệt' : 'Từ chối', nguoi_duyet: ccUser(), ngay_duyet: HR.isoToday(), ly_do_tc: ok ? '' : ly || '' }; Object.assign(row, d); (w.xmQ = w.xmQ || {})[so] = d; bcX(u).v++; u._bc = {}; saveUnits();
+    wfRefreshRequest(u, [row], false).catch(function (er) { toast('Đơn đã xử lý, chưa đồng bộ lại công', 'err', er.message); });
     var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoOn(u) ? wfDemoGet : null;
     log('Đơn ' + so + ' (' + xmTypeText(row.kieu).toLowerCase() + ' ' + row.ma + ' ' + row.ngay + '): ' + d.trang_thai.toLowerCase());
     if (!call) return; call('xm-cap-nhat', { list: [Object.assign({ so: so }, d)] }).then(function () { delete w.xmQ[so]; saveUnits(); toast('Đã báo kết quả về app nhân viên', 'ok', 'Đơn ' + so + ': ' + d.trang_thai); }, function (er) { toast('Chưa báo được về app', 'err', er.message + ' – phần mềm gửi lại ở lần đồng bộ sau.'); });

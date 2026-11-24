@@ -526,12 +526,61 @@ function bcDue(def, now) {
 async function bcCron(env) {
   const db = env.DB; await ensureSchema(db); const cfg = await getCfg(db), demo = env.DEMO === '1' || cfg.demo_host === '1', now = Date.now(), origin = cfg.origin || '';
   if (!demo) await tbDon(db, cfg, now).catch(e => console.error('tbDon', e));
+  await ccCalcSchedule(db, cfg, now).catch(e => console.error('ccCalcSchedule', e));
   for (const r of (await db.prepare('SELECT cty, du_lieu FROM bc').all()).results) {
     let B; try { B = JSON.parse(r.du_lieu); } catch (e) { continue; } B.cty = r.cty;
     for (const def of B.ds || []) { const ky = bcDue(def, now); if (!ky) continue; if (await db.prepare('SELECT 1 FROM bc_gui WHERE id = ? AND ky = ?').bind(def.id, ky).first()) continue;
       try { await bcSend(db, cfg, demo, origin, B, def, now, ky); } catch (e) { console.error('bc', def.id, e); } }
   }
   await db.prepare('DELETE FROM bc_nd WHERE at < ?').bind(now - (demo ? 14 : 180) * 864e5).run();
+}
+function ccCalcSlot(now) {
+  const q = vnParts(now); if (!['00', '12'].includes(q.h) || Number(q.mi) >= 20) return '';
+  return `${q.y}-${q.m}-${q.d}T${q.h}:00`;
+}
+function ccReqMonths(a, b) {
+  a = String(a || '').slice(0, 10); b = String(b || a).slice(0, 10); const out = [];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(a) || !/^\d{4}-\d{2}-\d{2}$/.test(b) || b < a) return out;
+  let d = a, guard = 0; while (d <= b && guard++ < 400) { const ym = d.slice(0, 7); if (!out.includes(ym)) out.push(ym); d = addDaysIso(d, 1); }
+  return out;
+}
+async function ccCalcQueue(db, cfg, months) {
+  if (!months || !months.size) return;
+  let old = []; try { old = JSON.parse(cfg.cc_tinh_req_months || '[]'); } catch (e) { }
+  if (!Array.isArray(old)) old = [];
+  const next = [...new Set(old.concat([...months]).filter(x => /^\d{4}-\d{2}$/.test(x)))].sort().slice(-240), value = JSON.stringify(next);
+  await setCfg(db, { cc_tinh_req_months: value }); cfg.cc_tinh_req_months = value;
+}
+async function ccCalcClearMonth(db, cfg, ym) {
+  let old = []; try { old = JSON.parse(cfg.cc_tinh_req_months || '[]'); } catch (e) { }
+  if (!Array.isArray(old)) old = [];
+  const next = old.filter(x => x !== ym); if (next.length === old.length) return;
+  const value = JSON.stringify(next); await setCfg(db, { cc_tinh_req_months: value }); cfg.cc_tinh_req_months = value;
+}
+async function ccCalcSchedule(db, cfg, now) {
+  if (cfg.cc_tinh_auto !== '1') return;
+  const slot = ccCalcSlot(now); if (!slot || cfg.cc_tinh_last_slot === slot || cfg.cc_tinh_due === slot) return;
+  if (now - (Number(cfg.cc_tinh_active_at) || 0) > 30 * 60e3) return; // chỉ đặt lịch khi trang quản trị vừa hoạt động
+  await setCfg(db, { cc_tinh_due: slot }); cfg.cc_tinh_due = slot;
+}
+async function ccCalcApi(r, db, cfg, body, url, req, now, jc) {
+  if (r === 'cong-tinh-cfg') {
+    if (req.method === 'GET') { await setCfg(db, { cc_tinh_active_at: String(now) }); cfg.cc_tinh_active_at = String(now); }
+    if (req.method === 'POST' && body && Object.prototype.hasOwnProperty.call(body, 'auto')) {
+      const auto = body.auto ? '1' : '0'; await setCfg(db, { cc_tinh_auto: auto, cc_tinh_active_at: String(now), cc_tinh_due: '' }); cfg.cc_tinh_auto = auto; cfg.cc_tinh_active_at = String(now); cfg.cc_tinh_due = '';
+    }
+    if (cfg.cc_tinh_auto == null) cfg.cc_tinh_auto = '0';
+    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', active: !!Number(cfg.cc_tinh_active_at || 0) });
+  }
+  if (r === 'cong-tinh' && req.method === 'GET' && url.searchParams.has('ym')) {
+    const ym = String(url.searchParams.get('ym') || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
+    await setCfg(db, { cc_tinh_active_at: String(now) }); cfg.cc_tinh_active_at = String(now);
+    const slot = cfg.cc_tinh_auto === '1' ? ccCalcSlot(now) : '';
+    if (slot && cfg.cc_tinh_last_slot !== slot && cfg.cc_tinh_due !== slot) { await setCfg(db, { cc_tinh_due: slot }); cfg.cc_tinh_due = slot; }
+    let months = []; try { months = JSON.parse(cfg.cc_tinh_req_months || '[]'); } catch (e) { } if (!Array.isArray(months)) months = [];
+    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', due: cfg.cc_tinh_due || '', requestMonths: months, ym });
+  }
+  return null;
 }
 async function bcApi(r, db, cfg, body, url, req, now, demo, jc, ctyOk) {
   if (r === 'bc' && req.method === 'POST') {
@@ -943,7 +992,7 @@ function qtDeptClone(u, pbs) {
 // /api/sync/* gọi bằng phiên đăng nhập trang quản trị: thao tác ghi cần quyền SỬA một trong các tính năng sau (ccwifi = Chấm công Wi‑Fi, nơi chạy tự động đồng bộ)
 const QT_SYNC_MODS = {
   'nhan-vien': ['ccwifi', 'appnv', 'nv'], pin: ['ccwifi', 'appnv', 'nv'], 'doi-ma': ['ccwifi', 'appnv', 'nv'], 'mo-khoa': ['ccwifi', 'appnv', 'nv'],
-  cong: ['ccwifi', 'cc'], 'don-cap-nhat': ['ccwifi', 'np', 'cc'], 'xm-cap-nhat': ['ccwifi', 'cc', 'np'], lich: ['ccwifi', 'cc', 'tlsx'],
+  cong: ['ccwifi', 'cc', 'np'], 'cong-tinh': ['ccwifi', 'cc'], 'cong-tinh-cfg': ['ccwifi', 'cc'], 'don-cap-nhat': ['ccwifi', 'np', 'cc'], 'xm-cap-nhat': ['ccwifi', 'cc', 'np'], lich: ['ccwifi', 'cc', 'tlsx'],
   phieu: ['ccwifi', 'phieuluong', 'bl', 'chiluong'], 'phieu-tra-loi': ['ccwifi', 'phieuluong', 'bl', 'chiluong'],
   'ho-so': ['ccwifi', 'nv', 'hoso', 'hd', 'appnv'], 'kho-file': ['ccwifi', 'nv', 'hoso', 'hd'], 'kho-xoa': ['ccwifi', 'nv', 'hoso', 'hd'], 'cham-xoa': ['ccwifi', 'cc']
 };
@@ -975,7 +1024,7 @@ async function api(req, env, url) {
   if (p.startsWith('/api/demo/')) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     if (!demo) return jc({ ok: false, loi: 'Chỉ có ở bản thử.' }, 404);
-    const r = p.slice(10);
+    const r = p.slice(10), ccCalc = await ccCalcApi(r, db, cfg, body, url, req, now, jc); if (ccCalc) return ccCalc;
     if (r === 'nv') return jc({ ok: true, pin: DEMO_PIN, cty: DEMO.cty.map(c => ({ ten: c.ten, ds: c.ds.map(e => ({ ma: e.ma, ten: e.ten, pb: e.pb, cd: e.cd })) })) });
     if (r === 'cham') {
       const tu = String(url.searchParams.get('tu') || isoVN(now - 13 * 864e5)), den = String(url.searchParams.get('den') || isoVN(now));
@@ -994,14 +1043,17 @@ async function api(req, env, url) {
       const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [];
       for (const x of list) { const ma = String(x.ma || '').toUpperCase(), e = demoFind(ma); if (!e) continue; const dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000), old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first(); if (old && old.du_lieu === dl) continue;
         st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80))); }
-      if (st.length) await db.batch(st); return jc({ ok: true, n: st.length });
+      if (st.length) await db.batch(st);
+      await ccCalcClearMonth(db, cfg, ym);
+      if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
+      return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
       const notices = [];
       for (const x of list) {
         const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o || !demoFind(o.ma)) continue;
-        if (x.xoa) { st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
+        if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
           const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
           const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh;
@@ -1009,33 +1061,39 @@ async function api(req, env, url) {
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
           const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh); if (packed == null) continue;
           const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
+          mark(o.tu, o.den); mark(tu, den);
           st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
         }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
+        mark(o.tu, o.den);
         st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay) || null, now, so));
         if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') notices.push({ ma: o.ma, so, t: 'Đơn ' + o.loai + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.tu.slice(8) + '/' + o.tu.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      await ccCalcQueue(db, cfg, months);
       if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, true, [n.ma], n.t, n.b, n.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
     if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE trang_thai != \'Đã hủy\' ORDER BY tao DESC LIMIT 300').all()).results.filter(x => demoFind(x.ma)).map(x => ({ ...x, ...requestText(x.ly_do) })) }); // 16/11
     if (r === 'xm-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [], months = new Set(), mark = d => ccReqMonths(d, d).forEach(m => months.add(m));
       for (const x of list) {
         const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o || !demoFind(o.ma)) continue;
-        if (x.xoa) { st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
+        if (x.xoa) { mark(o.ngay); st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
         if (x.sua) {
           const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh);
           const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
           if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
+          mark(o.ngay); mark(ngay);
           st.push(db.prepare('UPDATE xin_muon SET ngay = ?, kieu = ?, gio = ?, phut = ?, ly_do = ?, cap_nhat = ? WHERE so = ?').bind(ngay, kieu, gio || null, x.phut == null ? o.phut : Number(x.phut) || null, ly, now, so)); continue;
         }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
+        mark(o.ngay);
         st.push(db.prepare('UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), now, so));
         if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') bao.push({ ma: o.ma, so, t: 'Đơn ' + xmTypeName(o.kieu) + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.ngay.slice(8) + '/' + o.ngay.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      await ccCalcQueue(db, cfg, months);
       if (bao.length) later(req, Promise.all(bao.map(b => requestNotice(db, cfg, url.origin, true, [b.ma], b.t, b.b, b.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
@@ -1094,6 +1152,7 @@ async function api(req, env, url) {
       }
       if (ghi && /^(pin|doi-ma|mo-khoa|kho-xoa|phieu)$/.test(r)) await qtLog(db, QU, 'đồng bộ ' + r, r === 'pin' || r === 'mo-khoa' ? String(body.ma || '') : r === 'doi-ma' ? String(body.cu || '') + ' → ' + String(body.moi || '') : String(body.ym || ''), 'ok');
     }
+    { const ccCalc = await ccCalcApi(r, db, cfg, body, url, req, now, jc); if (ccCalc) return ccCalc; }
     if (r === 'ping') {
       const n = await db.prepare('SELECT COUNT(*) AS n, SUM(CASE WHEN pin IS NOT NULL THEN 1 ELSE 0 END) AS c FROM nv WHERE active = 1').first();
       return jc({ ok: true, ver: VER, ten_cty: cfg.ten_cty, che_do: cfg.che_do, so_nv: n.n || 0, co_pin: n.c || 0, now });
@@ -1163,29 +1222,32 @@ async function api(req, env, url) {
     { const vt = await bcApi(r, db, cfg, body, url, req, now, false, jc, c => !!c); if (vt) return vt; } // 16/11 13:29: gửi báo cáo định kỳ
     if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE ngay >= ? ORDER BY tao').bind(String(url.searchParams.get('tu') || '2000-01-01')).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) }); // 16/11
     if (r === 'xm-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [], months = new Set(), mark = d => ccReqMonths(d, d).forEach(m => months.add(m));
       for (const x of list) {
         const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o) continue;
-        if (x.xoa) { st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
+        if (x.xoa) { mark(o.ngay); st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
         if (x.sua) {
           const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh);
           const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
           if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
+          mark(o.ngay); mark(ngay);
           st.push(db.prepare('UPDATE xin_muon SET ngay = ?, kieu = ?, gio = ?, phut = ?, ly_do = ?, cap_nhat = ? WHERE so = ?').bind(ngay, kieu, gio || null, x.phut == null ? o.phut : Number(x.phut) || null, ly, now, so)); continue;
         }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
+        mark(o.ngay);
         st.push(db.prepare('UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ?').bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), now, so));
         if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') bao.push({ ma: o.ma, so, t: 'Đơn ' + xmTypeName(o.kieu) + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.ngay.slice(8) + '/' + o.ngay.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      await ccCalcQueue(db, cfg, months);
       if (bao.length) later(req, Promise.all(bao.map(b => requestNotice(db, cfg, url.origin, false, [b.ma], b.t, b.b, b.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [];
+      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
       for (const x of list) {
         const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o) continue;
-        if (x.xoa) { st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
+        if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
           const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
           const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh;
@@ -1193,13 +1255,16 @@ async function api(req, env, url) {
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
           const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh); if (packed == null) continue;
           const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
+          mark(o.tu, o.den); mark(tu, den);
           st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
         }
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
+        mark(o.tu, o.den);
         st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay), now, so));
         if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') notices.push({ ma: o.ma, so, t: 'Đơn ' + o.loai + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: String(o.tu || '').slice(8) + '/' + String(o.tu || '').slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      await ccCalcQueue(db, cfg, months);
       if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, false, [n.ma], n.t, n.b, n.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
@@ -1213,6 +1278,8 @@ async function api(req, env, url) {
         st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80)));
       }
       if (st.length) await db.batch(st);
+      await ccCalcClearMonth(db, cfg, ym);
+      if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
       return jc({ ok: true, n: st.length });
     }
     if (r === 'phieu' && req.method === 'POST') {
@@ -1732,6 +1799,7 @@ async function api(req, env, url) {
       if (!duocDuyet(await hsLite(db, demo), s.nv.ma, x0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
       const r = await db.prepare("UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
       if (!r.meta.changes) return bad('Đơn này vừa được người khác xử lý.');
+      if (ok) await ccCalcQueue(db, cfg, new Set(ccReqMonths(x0.ngay, x0.ngay)));
       later(req, requestNotice(db, cfg, url.origin, demo, [x0.ma], 'Đơn ' + xmTypeName(x0.kieu) + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), x0.ngay.slice(8) + '/' + x0.ngay.slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
       return json({ ok: true, nguoi: s.nv.ten });
     }
@@ -1741,6 +1809,7 @@ async function api(req, env, url) {
     if (!duocDuyet(await hsLite(db, demo), s.nv.ma, d0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
     // nhiều người cùng có quyền: ai bấm trước thì đơn chuyển trạng thái và ghi tên người đó; người bấm sau nhận thông báo đã xử lý
     const r = await db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
+    if (r.meta.changes && ok) await ccCalcQueue(db, cfg, new Set(ccReqMonths(d0.tu, d0.den)));
     if (r.meta.changes) later(req, requestNotice(db, cfg, url.origin, demo, [d0.ma], 'Đơn ' + String(d0.loai || 'nghỉ').toLowerCase() + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), String(d0.tu || '').slice(8) + '/' + String(d0.tu || '').slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
     return r.meta.changes ? json({ ok: true, nguoi: s.nv.ten }) : bad('Đơn này vừa được người khác xử lý.');
   }
