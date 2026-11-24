@@ -10602,7 +10602,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   function ccUser() { return pqWho() || (S.settings.user && S.settings.user.name) || 'Quản trị viên'; }
   function bcEditor() { return ccUser(); }
   function bcWho() { return '<p class="bc-who">' + ic('nv', 14) + 'Thực hiện bởi tài khoản đang dùng: <b>' + esc(ccUser()) + '</b></p>'; }
-  function bcSaveX(u, msg) { var x = bcX(u); x.v++; u.ver = (u.ver || 0) + 1; saveUnits(); if (msg) log('Tổng hợp công (' + u.name + '): ' + msg); }
+  function bcSaveX(u, msg) { var x = bcX(u); x.v++; u.ver = (u.ver || 0) + 1; var saved = saveUnits(); if (msg) log('Tổng hợp công (' + u.name + '): ' + msg); return saved; }
 
   // Loại ngày của 1 người vào ngày iso: hol (lễ, tết, nghỉ bù) · rest (nghỉ tuần, nghỉ hoán đổi) · work · half
   function bcKind(s, sh, iso) {
@@ -10814,7 +10814,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     res.forEach(function (r) { r.ppl.forEach(function (p) { if (!bcInK(p, f.k)) return; T.n++; T.hours += p.exc.hr ? p.sum.hours : 0; T.night += p.sum.night || 0; T.work += p.sum.work; T.paid += p.sum.paid + p.sum.hol; T.issues += p.sum.issues; T.ot += p.sum.otN + p.sum.otR + p.sum.otH; T.otWait += p.sum.otWait; T.manual += p.sum.manual; T.otPay += p.sum.otPay; T.late += p.sum.late; }); });
     var lockBar = '<div class="bc-locks">' + res.map(function (r) {
       var L = r.lock; return '<div class="bc-lk' + (L ? ' on' : '') + '">' + ic(L ? 'check' : 'np', 16) + '<span>' + (isMulti() ? '<b>' + esc(shortUnit(r.u.name)) + '</b> · ' : '') + '<a class="bc-otm ' + (r.s.rule.otMode === 'confirm' ? 'cf' : '') + '" href="#thietlapcc" title="Đổi ở Thiết lập chấm công → Quy định tính công">Tăng ca: ' + (r.s.rule.otMode === 'confirm' ? 'chờ xác nhận mới tính' : 'mặc định tính') + '</a> ' + (L ? 'Đã chốt công tháng ' + HR.ymLabel(f.m) + ' <small>' + esc(L.by + ' · ' + L.at) + '</small>' + (function () { var df = bcLockDiff(r); return df.length ? ' <span class="tag tag-warn" title="' + esc(df.join(', ')) + '">Bảng công hiện khác lúc chốt: ' + df.length + ' người (sửa sau chốt hoặc đổi thiết lập)</span>' : ''; })() + (function () { var c = r.u.wf && r.u.wf.cong && r.u.wf.cong[f.m]; if (!c) return ''; var ks = Object.keys(c), ok = ks.filter(function (k) { return c[k].xn === 1; }).length, bad = ks.filter(function (k) { return c[k].xn === 2; }); return ' <span class="tag ' + (bad.length ? 'tag-bad' : ok === ks.length ? 'tag-ok' : 'tag-mute') + '" title="' + esc(bad.map(function (k) { return k + ': ' + (c[k].ph || ''); }).join(' | ')) + '">Nhân viên xác nhận ' + ok + '/' + ks.length + (bad.length ? ' · ' + bad.length + ' báo sai' : '') + '</span>'; })() : 'Tháng ' + HR.ymLabel(f.m) + ' đang mở – chưa chốt công') + '</span>' +
-        (L ? '<button class="btn btn-sm" data-act="bc-unlock" data-id="' + r.u.id + '">Mở lại</button>' : '<button class="btn btn-sm btn-primary" data-act="bc-lock" data-id="' + r.u.id + '">Chốt công tháng</button>') + '</div>';
+        (L ? '<button class="btn btn-sm" data-act="bc-unlock" data-id="' + r.u.id + '">Mở lại</button>' : '<button class="btn btn-sm btn-primary" data-act="bc-lock" data-id="' + r.u.id + '">Chốt công tháng</button>') + '<button class="btn btn-sm" data-act="bc-reset" data-id="' + r.u.id + '"' + (L ? ' disabled title="Mở lại công tháng trước khi làm mới"' : '') + '>Làm mới bảng công</button></div>';
     }).join('') + '</div>';
     // 0.3.2: danh sách nhân viên báo sai công tháng này (phản hồi từ trang chấm công trên điện thoại)
     var fb = []; res.forEach(function (r) { var c = r.u.wf && r.u.wf.cong && r.u.wf.cong[f.m]; if (!c) return; var nv = nvIndex(r.u); Object.keys(c).forEach(function (k) { if (c[k].xn === 2) fb.push({ u: r.u, id: k, name: (nv[k] || {})['Họ và tên'] || k, ph: c[k].ph || '', at: c[k].at || '' }); }); });
@@ -11104,6 +11104,43 @@ if (typeof module !== 'undefined') module.exports = XW;
   ACTS['bc-unok'] = function (a, key) { bcOkSet([key], false); };
   ACTS['bc-okmany'] = function () { bcOkSet($$('.ot-ck').filter(function (c) { return c.checked; }).map(function (c) { return c.getAttribute('data-k'); }), true); };
 
+  ACTS['bc-reset'] = function (a, uid) {
+    var u = unitById(uid), ym = (PS.bc || {}).m, r = u && ym && bcMonth(u, ym); if (!u || !r || r.lock) { toast('Không thể làm mới', 'err', 'Mở lại công tháng trước khi làm mới.'); return; }
+    if (!pqAct('cc')) return;
+    var eligible = r.ppl.filter(function (p) { return !p.exc.nc; }), exempt = r.ppl.filter(function (p) { return p.exc.nc; }).length;
+    var options = eligible.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name + ' · ' + p.id) + '</option>'; }).join('');
+    var body = '<div class="field"><label for="bcResetScope">Phạm vi</label><select class="input" id="bcResetScope"><option value="all">Toàn bộ nhân viên</option><option value="one">Theo từng nhân viên</option></select></div>' +
+      '<div class="field" id="bcResetEmpWrap" style="display:none;margin-top:10px"><label for="bcResetEmp">Nhân viên</label><select class="input" id="bcResetEmp"' + (eligible.length ? '' : ' disabled') + '>' + (options || '<option value="">Không có nhân viên cần làm mới</option>') + '</select></div>' +
+      '<div class="notice bad" style="margin:12px 0">' + ic('info') + '<div><b>Dữ liệu chấm công tháng ' + HR.ymLabel(ym) + ' sẽ bị xóa</b>: dòng nhập từ file, lượt vào/ra trên máy chủ, sửa tay và nhật ký sửa trong phạm vi đã chọn. Thao tác này không khôi phục được.</div></div>' +
+      '<p class="faint" style="font-size:12.5px">Người miễn chấm công (' + exempt + ') được giữ nguyên. Đơn nghỉ và đơn đi muộn/về sớm/công tác đã duyệt, ngày lễ/tết, ngày nghỉ tuần và lịch ca cũng được giữ; bảng công sẽ tự tính lại.</p>' +
+      bcWho() + '<p id="bcResetMsg" class="tl-msg"></p><div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Hủy</button><button class="btn btn-danger" id="bcResetGo"' + (eligible.length ? '' : ' disabled') + '>Làm mới bảng công</button></div>';
+    var m = modal('Làm mới bảng công tháng ' + HR.ymLabel(ym), shortUnit(u.name), body, true), scope = $('#bcResetScope', m), empWrap = $('#bcResetEmpWrap', m), goBtn = $('#bcResetGo', m), msg = $('#bcResetMsg', m);
+    scope.addEventListener('change', function () { empWrap.style.display = scope.value === 'one' ? '' : 'none'; goBtn.disabled = !eligible.length || (scope.value === 'one' && !$('#bcResetEmp', m).value); });
+    goBtn.addEventListener('click', function () {
+      if (!pqAct('cc')) return;
+      var fresh = bcMonth(u, ym); if (fresh.lock) { msg.textContent = 'Tháng đã chốt công. Mở lại tháng trước khi làm mới.'; goBtn.disabled = true; return; }
+      var ids = scope.value === 'one' ? [$('#bcResetEmp', m).value] : eligible.map(function (p) { return p.id; });
+      if (!ids.length || !ids[0]) { msg.textContent = 'Chọn nhân viên cần làm mới.'; return; }
+      var targets = {}; ids.forEach(function (id) { targets[String(id).toUpperCase()] = 1; }); goBtn.disabled = true; msg.textContent = 'Đang xóa lượt chấm trên máy chủ…';
+      var remote = wfOn(u) ? wfCall(u, 'cham-xoa', { ym: ym, ma: ids }) : wfDemoOn(u) ? wfDemoGet('cham-xoa', { ym: ym, ma: ids }) : Promise.resolve({ ok: true, n: 0 });
+      remote.then(function () {
+        u.data.CC = u.data.CC || {}; u.data.CC[ym] = (u.data.CC[ym] || []).filter(function (row) { return !targets[String(row['Mã NV'] || '').toUpperCase()]; });
+        var X = bcX(u), clearMonth = function (root) { var o = root[ym] || {}; Object.keys(o).forEach(function (key) { var sep = key.lastIndexOf('|'), id = (sep < 0 ? key : key.slice(0, sep)).toUpperCase(); if (targets[id]) delete o[key]; }); if (Object.keys(o).length) root[ym] = o; else delete root[ym]; };
+        clearMonth(X.m); clearMonth(X.ok); X.log = X.log.filter(function (entry) { return entry.ym !== ym || !entry.id || !targets[String(entry.id).toUpperCase()]; });
+        if (u.wf && u.wf.punches && u.wf.punches[ym]) u.wf.punches[ym] = u.wf.punches[ym].filter(function (p) { return !targets[String(p.ma || '').toUpperCase()]; });
+        if (u.wf && u.wf.cong && u.wf.cong[ym]) { Object.keys(u.wf.cong[ym]).forEach(function (id) { if (targets[String(id).toUpperCase()]) delete u.wf.cong[ym][id]; }); if (!Object.keys(u.wf.cong[ym]).length) delete u.wf.cong[ym]; }
+        u._bc = {}; var saved = bcSaveX(u, 'làm mới bảng công tháng ' + ym + ' (' + (scope.value === 'one' ? ids[0] : ids.length + ' nhân viên') + ')'); m.close(); render();
+        var syncError = null, jobs = [Promise.resolve(saved)];
+        if (wfOn(u) || wfDemoOn(u)) jobs.push(wfSendCong(u, ym, true).catch(function (er) { syncError = er; }));
+        Promise.all(jobs).then(function () { if (SV && SV.me) return svFlushAll(true); }).then(function () {
+          if (SV && SV.me) svChip(); render();
+          if (syncError) toast('Đã làm mới bảng công', 'err', 'Chưa gửi lại bảng công lên máy chủ chấm công: ' + syncError.message);
+          else if (SV && SV.me && SV.st !== 'ok') toast('Đã làm mới bảng công', 'err', 'Chưa lưu được trạng thái mới lên máy chủ phần mềm. Kiểm tra trạng thái đồng bộ.');
+          else toast('Đã làm mới bảng công tháng ' + HR.ymLabel(ym), 'ok', 'Dữ liệu được tính lại; đơn đã duyệt và người miễn chấm công được giữ nguyên.');
+        });
+      }).catch(function (er) { goBtn.disabled = false; msg.textContent = 'Chưa xóa được lượt chấm trên máy chủ: ' + er.message; });
+    });
+  };
   /* ----- Chốt công tháng ----- */
   ACTS['bc-lock'] = function (a, uid) {
     var u = unitById(uid), ym = PS.bc.m, r = bcMonth(u, ym), iss = 0, wait = 0, n = r.ppl.length; r.ppl.forEach(function (p) { iss += p.sum.issues; wait += p.sum.otWait; });

@@ -836,6 +836,20 @@ async function punchesBetween(db, from, to, ma) {
   const st = ma ? db.prepare(sql).bind(from, to, ma) : db.prepare(sql).bind(from, to);
   return (await st.all()).results;
 }
+async function deleteMonthPunches(db, ym, mas) {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(ym || ''));
+  if (!m || !Array.isArray(mas) || mas.length > 2000) return null;
+  const ids = [...new Set(mas.map(x => String(x || '').trim().toUpperCase()))];
+  if (ids.some(x => !MA_RE.test(x))) return null;
+  if (!ids.length) return 0;
+  const from = Date.UTC(+m[1], +m[2] - 1, 1) - VN, to = Date.UTC(+m[1], +m[2], 1) - VN;
+  const st = [];
+  for (let i = 0; i < ids.length; i += 500) {
+    const part = ids.slice(i, i + 500);
+    st.push(db.prepare('DELETE FROM cham WHERE t >= ? AND t < ? AND ma IN (' + part.map(() => '?').join(',') + ')').bind(from, to, ...part));
+  }
+  const results = await db.batch(st); return results.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
+}
 async function logReject(db, ma, ip, lyDo, req) {
   await db.prepare('INSERT INTO tu_choi (t, ma, ip, ly_do, tb, may) VALUES (?, ?, ?, ?, ?, ?)').bind(Date.now(), ma || null, ip, lyDo, shortUA(req.headers.get('user-agent')), req.may || null).run();
 }
@@ -931,7 +945,7 @@ const QT_SYNC_MODS = {
   'nhan-vien': ['ccwifi', 'appnv', 'nv'], pin: ['ccwifi', 'appnv', 'nv'], 'doi-ma': ['ccwifi', 'appnv', 'nv'], 'mo-khoa': ['ccwifi', 'appnv', 'nv'],
   cong: ['ccwifi', 'cc'], 'don-cap-nhat': ['ccwifi', 'np', 'cc'], 'xm-cap-nhat': ['ccwifi', 'cc', 'np'], lich: ['ccwifi', 'cc', 'tlsx'],
   phieu: ['ccwifi', 'phieuluong', 'bl', 'chiluong'], 'phieu-tra-loi': ['ccwifi', 'phieuluong', 'bl', 'chiluong'],
-  'ho-so': ['ccwifi', 'nv', 'hoso', 'hd', 'appnv'], 'kho-file': ['ccwifi', 'nv', 'hoso', 'hd'], 'kho-xoa': ['ccwifi', 'nv', 'hoso', 'hd']
+  'ho-so': ['ccwifi', 'nv', 'hoso', 'hd', 'appnv'], 'kho-file': ['ccwifi', 'nv', 'hoso', 'hd'], 'kho-xoa': ['ccwifi', 'nv', 'hoso', 'hd'], 'cham-xoa': ['ccwifi', 'cc']
 };
 // phần phân quyền dùng để so: chỉ quản trị viên được đổi (bỏ các trường thay đổi khi dùng bình thường, như lần đăng nhập gần nhất)
 function pqCore(pq) { if (!pq) return null; return { on: !!pq.on, roles: pq.roles || [], users: (pq.users || []).map(u => ({ id: u.id, nv: u.nv || '', user: u.user, role: u.role, dv: u.dv, pb: u.pb, off: !!u.off })) }; }
@@ -968,6 +982,11 @@ async function api(req, env, url) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den)) return jc({ ok: false, loi: 'tu, den dạng YYYY-MM-DD' }, 400);
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
       return jc({ ok: true, now, list: (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '' })) });
+    }
+    if (r === 'cham-xoa' && req.method === 'POST') {
+      const mas = Array.isArray(body.ma) ? body.ma.slice(0, 2000).filter(ma => demoFind(String(ma || '').trim().toUpperCase())).map(ma => String(ma).trim().toUpperCase()) : body.ma;
+      const n = await deleteMonthPunches(db, body.ym, mas); if (n == null) return jc({ ok: false, loi: 'Tháng hoặc danh sách nhân viên không hợp lệ.' }, 400);
+      return jc({ ok: true, n });
     }
     if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' AND trang_thai != 'Đã hủy' ORDER BY tao DESC LIMIT 200").all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
     if (r === 'cong' && req.method === 'POST') {
@@ -1131,6 +1150,10 @@ async function api(req, env, url) {
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
       const rows = (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '' }));
       return jc({ ok: true, list: rows });
+    }
+    if (r === 'cham-xoa' && req.method === 'POST') {
+      const n = await deleteMonthPunches(db, body.ym, body.ma); if (n == null) return jc({ ok: false, loi: 'Tháng hoặc danh sách nhân viên không hợp lệ.' }, 400);
+      return jc({ ok: true, n });
     }
     if (r === 'don') {
       const tu = String(url.searchParams.get('tu') || '2000-01-01');
