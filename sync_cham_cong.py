@@ -12,7 +12,7 @@ DEVICE_IP = "192.168.1.201"
 DEVICE_PORT = 4370
 COMM_KEY = 0
 API_URL = "https://quan-ly-nhan-suu.phuoc-nhtvietcasa.workers.dev/api/sync/cham"
-API_KEY = "PASTE_CONNECTION_CODE_HERE"
+API_KEY = "QTT-25053D388F2DC2BA809B927A"
 
 # Optional mapping when device user IDs differ from employee codes.
 USER_ID_TO_MA = {}
