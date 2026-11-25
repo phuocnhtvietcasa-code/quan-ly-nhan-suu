@@ -253,7 +253,7 @@ function weekendDutyDates(d) {
   const x = requestText(d && d.ly_do), ngayTrucCN = x.ngayTrucCN, ngayNghiBuT7 = x.ngayNghiBuT7;
   return ISO_RE.test(ngayTrucCN) && ISO_RE.test(ngayNghiBuT7) && isoDowW(ngayTrucCN) === 0 && isoDowW(ngayNghiBuT7) === 6 && addDaysIso(ngayNghiBuT7, 1) === ngayTrucCN ? { ngayTrucCN, ngayNghiBuT7 } : null;
 }
-function xmTypeName(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều' })[k] || 'Đơn đi muộn, về sớm, công tác'; }
+function xmTypeName(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Đi công tác' })[k] || 'Đơn đi muộn, về sớm, công tác'; }
 async function requestNotice(db, cfg, origin, demo, recipients, title, content, so, req, now) {
   const ids = [...new Set((recipients || []).filter(Boolean).map(String))]; if (!ids.length) return;
   const BY = await hsLite(db, demo), groups = new Map();
@@ -653,7 +653,7 @@ async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
   if (ti !== null && overnight && ti < plannedIn - 360) ti += 1440; if (to !== null && ti !== null && to < ti) to += 1440;
   const reqs = (await db.prepare("SELECT kieu, phut FROM xin_muon WHERE ma = ? AND ngay = ? AND trang_thai = 'Đã duyệt'").bind(ma, iso).all()).results;
   const leaves = (await db.prepare("SELECT loai, tu, den, ly_do FROM don WHERE ma = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ?").bind(ma, iso, iso).all()).results.filter(x => x.loai !== WEEKEND_DUTY_TYPE);
-  const fullTrip = leaves.some(x => /đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));
+  const fullTrip = leaves.some(x => /đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || '')) || reqs.some(x => ['di_cong_tac', 'cong_tac', 'di_cong', 'cong'].includes(x.kieu));
   const halfTrips = reqs.filter(x => x.kieu === 'cong_sang' || x.kieu === 'cong_chieu').length;
   const halfLeave = leaves.find(x => /nửa ngày/i.test(x.loai || ''));
   const fullLeave = leaves.find(x => !/đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));

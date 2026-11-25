@@ -10334,7 +10334,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   var XM_ST = { duyet: 'Được duyệt', tuchoi: 'Không duyệt', cho: 'Chờ duyệt', khong: 'Không xin phép', vuot: 'Quá giờ đã xin' };
   function xmCfg(s, u) { var x = s.xm; if (!x) return u && u.source === 'sample' ? { on: true, han: 'ngay', n: 0, max: 0, tp: 0, tinh: 'dung', mau: 1 } : { on: false, han: 'ngay', n: 0, max: 0, tp: 0, tinh: 'dung' }; return { on: !!x.on, han: x.han || 'ngay', n: +x.n || 0, max: +x.max || 0, tp: +x.tp || 0, tpu: x.tpu === 'gio' ? 'gio' : 'phut', tinh: x.tinh === 'ghi' ? 'ghi' : 'dung' }; }
   function xmList(u) { return ((u.wf && u.wf.xm) || []).filter(function (x) { return x.trang_thai !== 'Đã hủy'; }); }
-  function xmTypeText(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều' })[k] || 'Đi muộn, về sớm, công tác'; }
+  function xmTypeText(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Đi công tác' })[k] || 'Đi muộn, về sớm, công tác'; }
   function xmCard(u, s) {
     var X = xmCfg(s, u), rad = function (k, v, t) { return '<label class="tl-ro"><input type="radio" name="xm_' + k + '" data-xm="' + k + '" value="' + v + '"' + (String(X[k]) === v ? ' checked' : '') + (X.on ? '' : ' disabled') + '><span>' + t + '</span></label>'; };
     return '<div class="card card-pad tl-xm" style="grid-column:1/-1"><div class="card-head"><div><h3>Đơn xin đi muộn, về sớm, công tác</h3><p>Nhân viên gửi trên app → người duyệt đơn nghỉ duyệt trên app (hoặc tại trang <a href="#np">Nghỉ phép</a>) → Tổng hợp công tính theo kết quả. Áp dụng cả công ty, cả 2 khối.</p></div>' +
@@ -10837,7 +10837,8 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (c.lc && c.lc !== 'N') S0.sched++; if (c.unsch && !c.guess) S0.unsch++;
         if (dsh && ((c.cong || 0) > 0 || (c.hours || 0) > 0 || (c.type === 'work' && c.ot > 0))) (dsh.parts || [dsh]).forEach(function (q) { S0.ca[q.id] = (S0.ca[q.id] || 0) + 1; });
         if (hasTrip && tripFullDay && !mm) c.k = 'CT';
-        if (!c.issue && c.k && c.k !== '?') { var d2 = bcCode(s, c.k); if (d2 && d2.don && !dn && c.src !== 'tay') c.issue = 'thieu-don'; }
+        var approvedTimeDay = (c.xl || []).some(function (z) { return z.st === 'duyet'; }) && (+c.workHours >= 8 || +c.cong >= 0.999);
+        if (!c.issue && c.k && c.k !== '?') { var d2 = bcCode(s, c.k); if (d2 && d2.don && !dn && !hasTrip && !approvedTimeDay && c.src !== 'tay') c.issue = 'thieu-don'; }
         c.otKind = c.kind === 'hol' ? 'H' : c.kind === 'rest' ? 'R' : 'N'; c.otRate = c.otKind === 'H' ? +R.otRateH : c.otKind === 'R' ? +R.otRateR : +R.otRateN;
         if (c.otRaw && !c.ot && !c.otWait) S0.otNo += c.otRaw;
         if (c.otWait) S0.otWait += c.otRaw;
@@ -11197,14 +11198,30 @@ if (typeof module !== 'undefined') module.exports = XW;
   function bcLogAdd(u, o) { var x = bcX(u); o.ts = Date.now(); o.at = nowVn(); o.by = o.by || bcEditor() || 'Quản lý'; o.after = !!x.lock[o.ym]; x.log.push(o); if (x.log.length > 3000) x.log = x.log.slice(-3000); }
   ACTS['bc-cell'] = function (a, key) {
     var F = bcFind(key); if (!F) return; var u = F.u, p = F.p, c = F.c, s = F.r.s, R = p.exc.sch ? s.ruleSx : s.rule, L = F.r.lock, ym = PS.bc.m;
+    var approvedXm = xmList(u).filter(function (z) { return z.ma === p.id && z.ngay === c.iso && z.trang_thai === 'Đã duyệt'; });
+    var tripRows = approvedXm.filter(function (z) { return z.kieu === 'cong_sang' || z.kieu === 'cong_chieu'; });
+    var fullTrip = !!(c.don && c.don.trip) || approvedXm.some(function (z) { return ['di_cong_tac', 'cong_tac', 'di_cong', 'cong'].indexOf(z.kieu) >= 0; });
+    var coversLate = fullTrip || tripRows.some(function (z) { return z.kieu === 'cong_sang'; }), coversEarly = fullTrip || tripRows.some(function (z) { return z.kieu === 'cong_chieu'; });
+    var bothTripSessions = fullTrip || (coversLate && coversEarly), notes = (c.note || []).filter(function (t) {
+      if (coversLate && (/^Không có đơn xin đi muộn$/.test(t) || /^Đi muộn \d+ phút/.test(t))) return false;
+      if (coversEarly && (/^Không có đơn xin về sớm$/.test(t) || /^Về sớm \d+ phút/.test(t))) return false;
+      if (/^Đi muộn hoặc về sớm quá mức/.test(t)) {
+        if (bothTripSessions) return false;
+        return (+R.halfLate > 0 && (+c.late || 0) > +R.halfLate) || (+R.halfEarly > 0 && (+c.early || 0) > +R.halfEarly);
+      }
+      return true;
+    });
+    var requestSummary = [];
+    if (c.don) requestSummary.push(c.don.t + ' · ' + HR.vnDate(c.don.from) + (c.don.to !== c.don.from ? '–' + HR.vnDate(c.don.to) : '') + (c.don.so ? ' · số ' + c.don.so : '') + (c.don.lich ? '' : ' (Đã duyệt)'));
+    approvedXm.forEach(function (z) { requestSummary.push('Đơn' + (z.so ? ' ' + z.so : '') + ' ' + xmTypeText(z.kieu).toLowerCase() + ' (Đã duyệt)'); });
     var ro = L && !R.editAfterLock;
     var info = '<dl class="kv2 bc-kv"><dt>Ngày</dt><dd>' + ccDowT(c.iso) + ' ' + HR.vnDate(c.iso) + ' · <b>' + BC_DAYK[c.kind] + '</b>' + (c.hol ? ' – ' + esc(c.hol.t) : '') + '</dd><dt>Ca</dt><dd>' + ((c.sh || p.sh) ? esc((c.sh || p.sh).id + ' ' + (c.sh || p.sh).inT + '–' + (c.sh || p.sh).outT) : '–') + (c.lc ? ' · <span class="bc-tag">' + (c.lc === 'N' ? 'lịch xếp ca: nghỉ' : 'theo lịch xếp ca') + '</span>' : c.unsch ? ' · <span class="bc-tag">chưa xếp ca</span>' : '') + (p.exc.sch ? ' · <span class="bc-tag">khối sản xuất · công theo giờ · ' + (p.exc.hrf ? 'lương theo giờ' : 'lương tháng') + '</span>' : p.exc.hrf ? ' · <span class="bc-tag">lương theo giờ thực tế</span>' : p.exc.hr ? ' · <span class="bc-tag">' + (p.exc.ctv ? 'CTV · ' : 'bán thời gian · ') + 'theo giờ</span>' : p.exc.nc ? ' · <span class="bc-tag">miễn chấm công</span>' : p.exc.no ? ' · <span class="bc-tag">không tính tăng ca</span>' : '') + '</dd>' +
       '<dt>File chấm công</dt><dd>' + (c.file ? esc((c.file.k || '(trống)') + (c.file.tin || c.file.tout ? ' · ' + (c.file.tin || '?') + '–' + (c.file.tout || '?') : '') + (c.file.ot ? ' · TC ' + c.file.ot + 'h' : '') + (c.file.note ? ' · ' + c.file.note : '')) : '<span class="faint">Không có dòng</span>') + '</dd>' +
-      '<dt>Đơn nghỉ</dt><dd>' + (c.don ? esc(c.don.t + ' · ' + HR.vnDate(c.don.from) + (c.don.to !== c.don.from ? '–' + HR.vnDate(c.don.to) : '') + (c.don.so ? ' · số ' + c.don.so : '')) : '<span class="faint">Không có đơn đã duyệt</span>') + '</dd>' +
+      '<dt>Đơn nghỉ</dt><dd>' + (requestSummary.length ? esc(requestSummary.join(' · ')) : '<span class="faint">Không có đơn đã duyệt</span>') + '</dd>' +
       '<dt>Giờ công</dt><dd>' + (c.workHours == null ? '<span class="faint">Chưa tính được</span>' : '<b>' + bcHoursTxt(c.workHours) + ' giờ</b>') + '</dd>' +
       '<dt>' + (c.manual ? 'Theo quy tắc' : 'Kết quả') + '</dt><dd>' + esc(bcDesc(c.manual ? Object.assign({}, c.auto, { otRaw: c.auto.ot, late: c.manual.lateAuto != null ? c.manual.lateAuto : c.auto.late }) : c)) + (c.issue ? ' · <span class="tag tag-bad">' + BC_ISSUE[c.issue] + '</span>' : '') + '</dd>' +
       (c.manual ? '<dt>Sửa tay</dt><dd>' + esc(bcDesc(c)) + ' <span class="faint">· ' + esc(c.manual.by + ' · ' + c.manual.at) + (c.manual.why ? ' · ' + c.manual.why : '') + '</span></dd>' : '') + '</dl>' +
-      (c.note.length && !c.manual ? '<ul class="tl-notes">' + c.note.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : '') +
+      (notes.length && !c.manual ? '<ul class="tl-notes">' + notes.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' : '') +
       (function () { var hs = (bcX(u).log || []).filter(function (o) { return o.id === p.id && o.iso === c.iso; }).slice().reverse(); if (!hs.length) return '';
         return '<details class="bc-his"' + (hs.length ? ' open' : '') + '><summary>Lịch sử sửa ô này (' + hs.length + ')</summary><ol>' + hs.map(function (o) { return '<li><span class="faint mono">' + esc(o.at || '') + '</span> · <b>' + esc(o.what || 'Sửa tay') + '</b> · ' + esc(o.by || '') + (o.after ? ' <span class="tag tag-warn">sau chốt</span>' : '') + '<div>' + esc(o.old || '') + ' → <b>' + esc(o.nw || '') + '</b>' + (o.why ? '<br><span class="faint">Lý do: ' + esc(o.why) + '</span>' : '') + '</div></li>'; }).join('') + '</ol></details>'; })();
     var otBox = c.otWait ? '<div class="notice warn bc-okbox">' + ic('info') + '<div>Tăng ca <b>' + ccNum(c.otRaw) + ' giờ</b> (' + c.otRate + '%) đang <b>chờ xác nhận</b> – chưa cộng vào giờ tăng ca.</div><button class="btn btn-primary btn-sm" data-act="bc-ok" data-id="' + key + '">Xác nhận</button></div>' :
