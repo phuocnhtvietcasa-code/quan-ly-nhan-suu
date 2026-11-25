@@ -1288,7 +1288,7 @@ function monthStats(st, HS, HSo) {
   return { ym: ym, tam: tam, dl: dl, gio: gio, tc: dl ? dl.tc || 0 : 0, chuan: chuan, est: est, sx: sx, qp: qp };
 }
 function totalHoursOf(dl) { if (!dl) return 0; if (dl.gio != null) return +dl.gio || 0; var ct = dl.ct || {}, total = 0, has = false; Object.keys(ct).forEach(function (dd) { if (ct[dd] && ct[dd][4] != null) { total += +ct[dd][4] || 0; has = true; } }); return has ? total : (+dl.cong || 0) * 8; }
-function workDaysTxt(hours) { return (Math.trunc(((+hours || 0) / 8) * 1000) / 1000).toFixed(3); }
+function workDaysTxt(hours) { return ((+hours || 0) / 8).toFixed(3); }
 function missingPunchDays(st, HS, L, LE, dl, ym, today) {
   if (st.me.ncc) return [];
   var ng = dl && dl.ngay || {}, ct = dl && dl.ct || {}, tuan = HS && HS.lich && HS.lich.tuan || [1, 2, 3, 4, 5], sx = !!(HS && HS.lich && HS.lich.sx), raw = {}, out = [], q = vp(st.now), nowMin = +q.h * 60 + +q.mi, K = khMap(HS);

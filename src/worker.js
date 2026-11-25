@@ -558,10 +558,13 @@ async function ccCalcClearMonth(db, cfg, ym) {
   const value = JSON.stringify(next); await setCfg(db, { cc_tinh_req_months: value }); cfg.cc_tinh_req_months = value;
 }
 async function ccCalcSchedule(db, cfg, now) {
-  if (cfg.cc_tinh_auto !== '1') return;
-  const slot = ccCalcSlot(now); if (!slot || cfg.cc_tinh_last_slot === slot || cfg.cc_tinh_due === slot) return;
-  if (now - (Number(cfg.cc_tinh_active_at) || 0) > 30 * 60e3) return; // chỉ đặt lịch khi trang quản trị vừa hoạt động
-  await setCfg(db, { cc_tinh_due: slot }); cfg.cc_tinh_due = slot;
+  const fileAuto = cfg.cc_tinh_auto === '1', deviceAuto = cfg.cc_device_tool_auto === '1';
+  if (!fileAuto && !deviceAuto) return;
+  const slot = ccCalcSlot(now); if (!slot || now - (Number(cfg.cc_tinh_active_at) || 0) > 30 * 60e3) return;
+  const next = {};
+  if (fileAuto && cfg.cc_tinh_last_slot !== slot && cfg.cc_tinh_due !== slot) next.cc_tinh_due = slot;
+  if (deviceAuto && cfg.cc_device_tinh_last_slot !== slot && cfg.cc_device_tinh_due !== slot) next.cc_device_tinh_due = slot;
+  if (Object.keys(next).length) { await setCfg(db, next); Object.assign(cfg, next); }
 }
 async function ccCalcApi(r, db, cfg, body, url, req, now, jc) {
   if (r === 'cong-tinh-cfg') {
@@ -569,20 +572,27 @@ async function ccCalcApi(r, db, cfg, body, url, req, now, jc) {
     if (req.method === 'POST' && body) {
       const next = {};
       if (Object.prototype.hasOwnProperty.call(body, 'auto')) { next.cc_tinh_auto = body.auto ? '1' : '0'; next.cc_tinh_active_at = String(now); next.cc_tinh_due = ''; }
-      if (Object.prototype.hasOwnProperty.call(body, 'deviceAuto')) next.cc_device_tool_auto = body.deviceAuto ? '1' : '0';
+      if (Object.prototype.hasOwnProperty.call(body, 'deviceAuto')) { next.cc_device_tool_auto = body.deviceAuto ? '1' : '0'; next.cc_tinh_active_at = String(now); next.cc_device_tinh_due = ''; }
       if (Object.keys(next).length) { await setCfg(db, next); Object.assign(cfg, next); }
     }
     if (cfg.cc_tinh_auto == null) cfg.cc_tinh_auto = '0';
     if (cfg.cc_device_tool_auto == null) cfg.cc_device_tool_auto = '0';
-    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', deviceAuto: cfg.cc_device_tool_auto === '1', active: !!Number(cfg.cc_tinh_active_at || 0) });
+    const active = !!Number(cfg.cc_tinh_active_at || 0);
+    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', deviceAuto: cfg.cc_device_tool_auto === '1', active, deviceActive: active });
   }
   if (r === 'cong-tinh' && req.method === 'GET' && url.searchParams.has('ym')) {
     const ym = String(url.searchParams.get('ym') || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
     await setCfg(db, { cc_tinh_active_at: String(now) }); cfg.cc_tinh_active_at = String(now);
-    const slot = cfg.cc_tinh_auto === '1' ? ccCalcSlot(now) : '';
-    if (slot && cfg.cc_tinh_last_slot !== slot && cfg.cc_tinh_due !== slot) { await setCfg(db, { cc_tinh_due: slot }); cfg.cc_tinh_due = slot; }
+    const slot = cfg.cc_tinh_auto === '1' || cfg.cc_device_tool_auto === '1' ? ccCalcSlot(now) : '';
+    if (slot) {
+      const next = {};
+      if (cfg.cc_tinh_auto === '1' && cfg.cc_tinh_last_slot !== slot && cfg.cc_tinh_due !== slot) next.cc_tinh_due = slot;
+      if (cfg.cc_device_tool_auto === '1' && cfg.cc_device_tinh_last_slot !== slot && cfg.cc_device_tinh_due !== slot) next.cc_device_tinh_due = slot;
+      if (Object.keys(next).length) { await setCfg(db, next); Object.assign(cfg, next); }
+    }
     let months = []; try { months = JSON.parse(cfg.cc_tinh_req_months || '[]'); } catch (e) { } if (!Array.isArray(months)) months = [];
-    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', due: cfg.cc_tinh_due || '', requestMonths: months, ym });
+    const active = now - (Number(cfg.cc_tinh_active_at) || 0) <= 30 * 60e3;
+    return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', due: cfg.cc_tinh_due || '', requestMonths: months, deviceAuto: cfg.cc_device_tool_auto === '1', deviceDue: cfg.cc_device_tinh_due || '', active, deviceActive: active, ym });
   }
   return null;
 }
@@ -1062,7 +1072,8 @@ async function api(req, env, url) {
       remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
       await ccCalcClearMonth(db, cfg, ym);
-      if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
+      if (body.slot && body.source === 'device' && body.slot === cfg.cc_device_tinh_due) { await setCfg(db, { cc_device_tinh_due: '', cc_device_tinh_last_slot: body.slot }); cfg.cc_device_tinh_due = ''; cfg.cc_device_tinh_last_slot = body.slot; }
+      else if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
       return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
@@ -1332,7 +1343,8 @@ async function api(req, env, url) {
       remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
       await ccCalcClearMonth(db, cfg, ym);
-      if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
+      if (body.slot && body.source === 'device' && body.slot === cfg.cc_device_tinh_due) { await setCfg(db, { cc_device_tinh_due: '', cc_device_tinh_last_slot: body.slot }); cfg.cc_device_tinh_due = ''; cfg.cc_device_tinh_last_slot = body.slot; }
+      else if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
       return jc({ ok: true, n: st.length });
     }
     if (r === 'phieu' && req.method === 'POST') {
