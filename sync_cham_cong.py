@@ -8,7 +8,7 @@ from zk import ZK
 
 
 # Device and API settings
-DEVICE_IP = "192.168.1.201"
+DEVICE_IP = "192.168.1.122"
 DEVICE_PORT = 4370
 COMM_KEY = 0
 API_URL = "https://quan-ly-nhan-suu.phuoc-nhtvietcasa.workers.dev/api/sync/cham"
