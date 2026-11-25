@@ -3242,10 +3242,51 @@ var HR = (function () {
     var dates = [x.ngayTrucCN, x._ngayTrucCN, x.ngayNghiBuT7, x._ngayNghiBuT7].filter(Boolean).map(function (v) { return String(v).slice(0, 10); }).sort();
     return dates[dates.length - 1] || requestStart(x);
   }
-  function tableRows(v) { return Array.isArray(v) ? v.filter(function (x) { return x && typeof x === 'object'; }) : []; }
+  function tableRows(v) {
+    if (typeof v === 'string') { try { return tableRows(JSON.parse(v)); } catch (e) { return []; } }
+    if (Array.isArray(v)) return v.filter(function (x) { return x && typeof x === 'object'; });
+    if (!v || typeof v !== 'object') return [];
+    if (['Mã NV', 'Mã phòng ban', 'Tên phòng ban', 'Ngày', 'Số đơn', 'ma', 'so', 'ngay', 'id', 'employeeId', 'employee_id', 'code', 'date', 'from', 'to', 'tuNgay', 'denNgay', 'ngayTrucCN', 'ngayNghiBuT7', 'contractId', 'kieu', 'loai', 'type'].some(function (k) { return Object.prototype.hasOwnProperty.call(v, k); })) return [v];
+    var wrapped = v.rows || v.items || v.records || v.list || v.requests || v.data;
+    if (wrapped != null) return tableRows(wrapped);
+    return Object.keys(v).map(function (k) { return v[k]; }).filter(function (x) { return x && typeof x === 'object'; });
+  }
+  function tablePeriod(x) {
+    var raw = x && (x.ym || x.month || x.thang || x['Tháng'] || x['Tháng lương'] || x['Kỳ lương'] || x['Ngày'] || x.ngay || x.date);
+    if (x && x.year && x.month && /^\d{1,2}$/.test(String(x.month))) raw = x.year + '-' + x.month;
+    var s = String(raw || ''), m = /^(\d{4})[-/](\d{1,2})/.exec(s);
+    if (m) return m[1] + '-' + (m[2].length < 2 ? '0' : '') + m[2];
+    m = /^(\d{1,2})[/-](\d{4})$/.exec(s);
+    return m ? m[2] + '-' + (m[1].length < 2 ? '0' : '') + m[1] : '';
+  }
   function tableMap(v) {
     var out = {};
-    if (v && typeof v === 'object' && !Array.isArray(v)) Object.keys(v).forEach(function (k) { out[k] = tableRows(v[k]); });
+    if (typeof v === 'string') { try { return tableMap(JSON.parse(v)); } catch (e) { return out; } }
+    if (Array.isArray(v)) {
+      v.forEach(function (x) {
+        if (!x || typeof x !== 'object') return;
+        var ym = tablePeriod(x), rows = x.rows || x.items || x.records || x.list || x.data;
+        if (!ym) return;
+        if (rows != null) out[String(ym)] = tableRows(rows);
+        else (out[String(ym)] = out[String(ym)] || []).push(x);
+      });
+      return out;
+    }
+    if (v && typeof v === 'object') {
+      if (v.months != null) return tableMap(v.months);
+      var month = tablePeriod(v);
+      if (month && (v.rows != null || v.items != null || v.records != null || v.list != null || v.data != null)) { out[String(month)] = tableRows(v.rows || v.items || v.records || v.list || v.data); return out; }
+      var wrappedRows = v.rows || v.items || v.records || v.list;
+      if (wrappedRows != null) return tableMap(wrappedRows);
+      if (Array.isArray(v.data)) return tableMap(v.data);
+      if (v.data && typeof v.data === 'object') return tableMap(v.data);
+      var source = v;
+      Object.keys(source).forEach(function (k) {
+        var ym = tablePeriod({ ym: k }), value = source[k];
+        if (ym) out[ym] = tableRows(value);
+        else if (/^\d{4}$/.test(k) && value && typeof value === 'object') Object.keys(value).forEach(function (m) { var month = tablePeriod({ ym: k + '-' + m }); if (month) out[month] = tableRows(value[m]); });
+      });
+    }
     return out;
   }
 
@@ -3528,6 +3569,7 @@ var HRR = (function (HR) {
     tv_pay: { name: 'Lương thử việc dưới 85%', law: 'BLLĐ 2019 Điều 26' },
     no_hd: { name: 'Đang làm mà không có HĐ hiệu lực', law: '' },
     don_pending: { name: 'Đơn nghỉ chờ duyệt', law: 'Quy chế công ty' },
+    xm_pending: { name: 'Đơn đi muộn, về sớm hoặc công tác chờ duyệt', law: 'Quy chế công ty' },
     phep_low: { name: 'Hết / sắp hết phép năm', law: 'BLLĐ 2019 Điều 113, 114' },
     phep_diff: { name: 'Quỹ phép lệch đơn đã duyệt', law: '' },
     ot: { name: 'Tăng ca gần / vượt trần', law: 'BLLĐ 2019 Điều 107; NĐ 145/2020 Điều 60–61' },
@@ -3624,6 +3666,16 @@ var HRR = (function (HR) {
       var reqType = x['Loại nghỉ'] || x.loai || x.kieu || 'Đơn nghỉ', reqDays = x['Số ngày'] == null ? x.so_ngay : x['Số ngày'];
       push('don_pending', lv, x['Mã NV'] || x.ma, reqType + ' ' + (reqDays == null ? '' : reqDays) + ' ngày · ' + progress + ' – ' + (days === null ? 'chờ duyệt' : days < 0 ? 'đã qua ngày nghỉ ' + (-days) + ' ngày' : 'nghỉ sau ' + days + ' ngày'),
         'Đơn ' + (x['Số đơn'] || x.so || '') + (from ? ' từ ' + vn(from) : '') + (to ? ' đến ' + vn(to) : '') + (npApprovalTrailText(unit, x) ? ' · ' + npApprovalTrailText(unit, x) : '') + ', người duyệt: ' + (x['Người duyệt'] || x.nguoi_duyet || '?') + (x['Lý do'] || x.ly_do ? '. Lý do: ' + (x['Lý do'] || x.ly_do) : '') + '.', { days: days, due: from || null, k: x['Số đơn'] || x.so || '', sources: ['Đơn nghỉ phép'] });
+    });
+    var xmNames = { muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Đi công tác' };
+    HR.tableRows(unit && unit.wf && unit.wf.xm).forEach(function (x) {
+      if (!npPending(x)) return;
+      var id = x.ma || x.employeeId || x.ma_nv || x['Mã NV'] || '', type = x.kieu || x.loai || x.type || '', label = xmNames[type] || type || 'Đơn đi muộn / về sớm / công tác';
+      var date = x.ngay || x.date || HR.requestStart(x), dateNum = date ? dnum(String(date).slice(0, 10)) : null, days = dateNum === null ? null : dateNum - r;
+      var level = days === null ? 'canh' : days < 0 ? 'gap' : days <= cfg.leavePendingSoon ? 'gap' : 'canh', progress = npApprovalBadge(unit, x), trail = npApprovalTrailText(unit, x);
+      push('xm_pending', level, id, label + ' · ' + progress + ' · ' + (days === null ? 'chờ duyệt' : days < 0 ? 'đã qua ngày ' + (-days) + ' ngày' : 'sau ' + days + ' ngày'),
+        'Đơn ' + (x.so || x['Số đơn'] || '') + (date ? ' · ' + vn(String(date).slice(0, 10)) : '') + (x.gio ? ' · ' + x.gio : '') + (x.phut ? ' · ' + x.phut + ' phút' : '') + (trail ? ' · ' + trail : '') + ', người duyệt: ' + (x.nguoi_duyet || '?') + (x.ly_do ? '. Lý do: ' + x.ly_do : '') + '.',
+        { days: days, due: date || null, k: x.so || x['Số đơn'] || (type + '|' + date), sources: ['Đơn đi muộn, về sớm, công tác'] });
     });
     // 8–9: quỹ phép
     leaveRecalc(d, R).forEach(function (q) {
@@ -3959,7 +4011,13 @@ if (typeof module !== 'undefined') module.exports = XW;
   var REF_DAY = null; // 0.3.1: 'Tính đến' = hôm nay → app mở qua đêm thì tự nhảy sang ngày mới
   setInterval(function () { try { var t = HR.isoToday(); if (REF_DAY && t !== REF_DAY && S.settings && S.settings.refMode === 'today') { REF_DAY = t; render(); } else REF_DAY = t; } catch (e) { } }, 60000);
   function refDate() { return S.settings.refMode === 'fixed' && S.settings.refDate ? S.settings.refDate : HR.isoToday(); }
-  function selUnits() { if (S.settings.unit === 'all' || !S.units.some(function (u) { return u.id === S.settings.unit; })) { var pk = pickIds(); return S.units.filter(function (u) { return pk.indexOf(u.id) >= 0; }); } return S.units.filter(function (u) { return u.id === S.settings.unit; }); }
+  function selUnits() {
+    var chosen = S.settings.unit, byId = chosen && chosen !== 'all' ? S.units.filter(function (u) { return String(u.id) === String(chosen); }) : [];
+    if (byId.length) return byId;
+    var byName = chosen && chosen !== 'all' ? S.units.filter(function (u) { return String(u.name || '').trim() === String(chosen).trim(); }) : [];
+    if (byName.length) return byName;
+    var pk = pickIds(); return S.units.filter(function (u) { return pk.indexOf(u.id) >= 0 || pk.indexOf(u.name) >= 0; });
+  }
   // 06/11/2026 – nhiều công ty độc lập (anh sửa 07:39: không phải mẹ – con), xem từng công ty hoặc Tổng các công ty
   // 06/11/2026: các công ty là đơn vị ĐỘC LẬP (không phân mẹ – con). "Tổng các công ty" = gộp các công ty được tích chọn
   var SAMPLE_V = '2026-11-11f'; // 12:30: Tổ/Ca mẫu; // 11:56: khối SX trả theo giờ, SG003 không chấm công; // 11:35: ca gãy, ca S/C/T 4 giờ; // 11/11 15:00: ca F, nghỉ 1 ngày/tuần không cố định; // 11/11: Health thêm Xưởng Đóng gói (lịch xếp ca, lương theo giờ) – // 13:20: tên HĐ bán thời gian   // 09/11 12:18: thêm DS010 bán thời gian, DS011 cộng tác viên (cột Loại lao động)
@@ -3968,7 +4026,11 @@ if (typeof module !== 'undefined') module.exports = XW;
   var SAMPLE_REF = '2026-11-07'; //   // 07/11 09:45: DS007 thử việc đủ 60 ngày, Health bỏ 'công ty mẹ'
   // trước: '2026-11-07b' – 06/11 23:35: Health có Ban Giám đốc   // đổi khi dữ liệu mẫu thay đổi → trình duyệt tự nạp lại bộ mẫu mới
   function groupLabel() { return 'Tổng các công ty'; }
-  function pickIds() { var all = S.units.map(function (u) { return u.id; }), p = (S.settings.pick || []).filter(function (id) { return all.indexOf(id) >= 0; }); return p.length ? p : all; }
+  function pickIds() {
+    var all = S.units.map(function (u) { return u.id; }), pick = Array.isArray(S.settings.pick) ? S.settings.pick : [];
+    var p = S.units.filter(function (u) { return pick.indexOf(u.id) >= 0 || pick.indexOf(u.name) >= 0; }).map(function (u) { return u.id; });
+    return p.length ? p : all;
+  }
   function whoUnits(us) { return us.length <= 3 ? us.map(function (u) { return esc(shortUnit(u.name)); }).join(' + ') : 'gộp ' + us.length + ' công ty'; }
   function shortUnit(n) { return String(n || '').replace(/\s*\(dữ liệu mẫu\)\s*$/i, '').replace(/^Công ty\s+(TNHH|CP|Cổ phần)\s+/i, ''); }
   function unitOrder() { return S.units.slice(); }
@@ -4762,6 +4824,14 @@ if (typeof module !== 'undefined') module.exports = XW;
     });
     (d.leaves && Array.isArray(d.leaves.pending) ? d.leaves.pending : []).forEach(function (x) { if (!x || x.days == null || !isFinite(Number(x.days))) return; var q = x.x || {}; ev.push({ days: Number(x.days), k: 'don', t: (x.days < 0 ? 'Đơn nghỉ chưa duyệt, đã qua ngày nghỉ' : 'Duyệt đơn nghỉ · ' + (q['Số ngày'] == null ? '—' : q['Số ngày']) + ' ngày'), who: wu(q['Họ và tên'] || q.ho_ten || q.ma, x.unit), go: 'np' }); });
     us.forEach(function (u) {
+      xmList(u).forEach(function (x) {
+        if (!npPending(x)) return;
+        var date = x.ngay || x.date || HR.requestStart(x), day = date ? HR.dnum(String(date).slice(0, 10)) : null; if (day === null) return;
+        var id = x.ma || x.employeeId || x.ma_nv || '', e = nvIndex(u)[id] || {}, type = xmTypeText(x.kieu || x.loai || x.type);
+        ev.push({ days: day - r, k: 'don', t: type + ' chờ duyệt', who: wu(e['Họ và tên'] || x.ten || x.name || id, u.name), go: 'np' });
+      });
+    });
+    us.forEach(function (u) {
       dashData(u && u.data).DON.forEach(function (x) {
         if (!x || typeof x !== 'object' || (x['Loại nghỉ'] || x.loai) !== 'Nghỉ thai sản' || (x['Trạng thái'] || x.trang_thai) !== 'Đã duyệt') return;
         var end = x['Đến ngày'] || x.denNgay || x.den, endNum = end ? HR.dnum(end) : null; if (endNum === null) return;
@@ -5470,7 +5540,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   /* ---------------- Bộ cảnh báo (bộ nhớ đệm) ---------------- */
   var ACACHE = { key: null, list: [] };
   function alertList() {
-    var key = selUnits().map(function (u) { return u.id + '@' + u.scannedAt + '#' + (u.ver || 0) + (u.ccset ? '~' + u.ccset.at : '') + '^' + (u.ccx ? u.ccx.v : 0) + '!' + (u.wf && u.wf.cong ? JSON.stringify(u.wf.cong).length : 0) + '$' + (u.lich ? JSON.stringify(u.lich.pub || {}).length + ':' + JSON.stringify(u.lich.cfg || {}) + ':' + Object.keys(u.lich.d || {}).length : ''); }).join(',') + '|' + refDate() + '|' + JSON.stringify(cfg());
+    var key = selUnits().map(function (u) { return u.id + '@' + u.scannedAt + '#' + (u.ver || 0) + (u.ccset ? '~' + u.ccset.at : '') + '^' + (u.ccx ? u.ccx.v : 0) + '!' + (u.wf && u.wf.cong ? JSON.stringify(u.wf.cong).length : 0) + '%' + hashStr(JSON.stringify(u.wf && u.wf.xm || [])) + '$' + (u.lich ? JSON.stringify(u.lich.pub || {}).length + ':' + JSON.stringify(u.lich.cfg || {}) + ':' + Object.keys(u.lich.d || {}).length : ''); }).join(',') + '|' + refDate() + '|' + JSON.stringify(cfg());
     if (ACACHE.key !== key) {
       var R = refDate(), t0 = Date.now(), list = [];
       selUnits().forEach(function (u) { try { list = list.concat(HRR.alerts(ccUnit(u), R, cfgFor(u))); /* 0.3.1: bảng công theo Tổng hợp công */ if (typeof lcAlerts === 'function') list = list.concat(lcAlerts(u)); } catch (e) { logErr('Tính cảnh báo cho ' + u.name, e); } });
@@ -5581,7 +5651,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   function alYm(a) { var k = String(a.k || a.ym || ''); var m = /(\d{4}-\d{2})/.exec(k); return m ? m[1] : ''; }
   var AL_FIX = {
     hd_soon: ['Lập hợp đồng mới', 'hd'], hd_expired: ['Lập hợp đồng mới', 'hd'], hd_indef: ['Lập HĐ không xác định thời hạn', 'hd'], no_hd: ['Lập hợp đồng', 'hd'], tv_long: ['Lập hợp đồng lao động', 'hd'], ld_hd: ['Lập lại hợp đồng', 'hd'],
-    tv_pay: ['Xem hợp đồng', 'phd'], ctv_hd: ['Xem hợp đồng', 'phd'], don_pending: ['Duyệt đơn', 'don'], phep_low: ['Mở quỹ phép', 'np'], phep_diff: ['Mở quỹ phép', 'np'],
+    tv_pay: ['Xem hợp đồng', 'phd'], ctv_hd: ['Xem hợp đồng', 'phd'], don_pending: ['Duyệt đơn', 'don'], xm_pending: ['Mở đơn', 'xm'], phep_low: ['Mở quỹ phép', 'np'], phep_diff: ['Mở quỹ phép', 'np'],
     nghi_don: ['Mở bảng công', 'cc'], di_muon: ['Mở bảng công', 'cc'], ot: ['Mở bảng công', 'cc'], cong_sai: ['Mở bảng công', 'cc'], xep_ca: ['Mở lịch xếp ca', 'lc'],
     luong_cc: ['Mở bảng lương', 'bl'], luong_cb: ['Mở cơ cấu nhân sự', 'ccu'], luong_cocau: ['Duyệt cơ cấu nhân sự', 'ccu'], bhxh_pt: ['Mở cơ cấu nhân sự', 'ccu'],
     ho_so: ['Mở hồ sơ', 'hs'], giay_to: ['Bổ sung giấy tờ', 'hs'], ts_back: ['Mở hồ sơ', 'hs'], luu_tru: ['Mở hồ sơ', 'hs'], dinh_bien: ['Mở sơ đồ tổ chức', 'go:tochuc'],
@@ -5599,6 +5669,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (to === 'phd') { openProfile(u.id, a.id, 'hd'); return; }
     if (to === 'hs') { ACTS['hs-open'](fakeA({ 'data-u': u.id }), a.id); return; }
     if (to === 'don') { go('np'); setTimeout(function () { ACTS['np-ok'](fakeA({}), u.id + '|' + a.k); }, 120); return; }
+    if (to === 'xm') { var np = ps('np2', { tab: 'don', st: 'Chờ duyệt', q: '', loai: '', dept: '' }); np.tab = 'xm'; np.st = 'Chờ duyệt'; go('np'); return; }
     if (to === 'np') { go('np'); return; }
     if (to === 'cc') { ACTS['al-cc'](fakeA({ 'data-u': u.id, 'data-id': a.id || '', 'data-m': ym || '' })); return; }
     if (to === 'lc') { ACTS['al-lc'](fakeA({ 'data-u': u.id })); return; }
@@ -10407,13 +10478,8 @@ if (typeof module !== 'undefined') module.exports = XW;
   var XM_ST = { duyet: 'Được duyệt', tuchoi: 'Không duyệt', cho: 'Chờ duyệt', khong: 'Không xin phép', vuot: 'Quá giờ đã xin' };
   function xmCfg(s, u) { var x = s.xm; if (!x) return u && u.source === 'sample' ? { on: true, han: 'ngay', n: 0, max: 0, tp: 0, tinh: 'dung', mau: 1 } : { on: false, han: 'ngay', n: 0, max: 0, tp: 0, tinh: 'dung' }; return { on: !!x.on, han: x.han || 'ngay', n: +x.n || 0, max: +x.max || 0, tp: +x.tp || 0, tpu: x.tpu === 'gio' ? 'gio' : 'phut', tinh: x.tinh === 'ghi' ? 'ghi' : 'dung' }; }
   function xmList(u) {
-    var raw = u && u.wf && u.wf.xm, rows = Array.isArray(raw) ? raw : raw && Array.isArray(raw.list) ? raw.list : raw && Array.isArray(raw.requests) ? raw.requests : raw && Array.isArray(raw.items) ? raw.items : raw && Array.isArray(raw.data) ? raw.data : null;
-    if (!rows) {
-      if (raw && typeof raw === 'object' && (raw.ma || raw.so || raw.kieu || raw.loai || raw.ngay)) rows = [raw];
-      else if (raw && typeof raw === 'object') rows = Object.keys(raw).map(function (k) { return raw[k]; });
-      else rows = [];
-    }
-    return rows.filter(function (x) { return x && typeof x === 'object' && (x.trang_thai || x.status) !== 'Đã hủy'; }).map(function (x) {
+    var raw = u && u.wf && u.wf.xm;
+    return HR.tableRows(raw).filter(function (x) { return (x.trang_thai || x.status) !== 'Đã hủy'; }).map(function (x) {
       if (x.ma && x.ngay && x.kieu && x.trang_thai) return x;
       return Object.assign({}, x, { ma: x.ma || x.employeeId || x.ma_nv || '', ngay: x.ngay || x.date || x.ngayYeuCau || '',
         kieu: x.kieu || x.loai || x.type || '', trang_thai: x.trang_thai || x.status || '' });
@@ -10772,7 +10838,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   function bcMonth(u, ym, sourceMode) {
     var s = ccOf(u), x = bcX(u), LC = lcOf(u), SGK = bcSynEnd(u), SG = SGK.slice(0, 10), TD = HR.isoToday(), fileOnly = sourceMode === 'file', deviceOnly = sourceMode === 'device', modeKey = fileOnly ? 'file' : deviceOnly ? 'device' : sourceMode === 'with-device' ? 'with-device' : 'all', key = ym + '|' + modeKey + '|' + (u.ver || 0) + '|' + (u.ccset ? u.ccset.at : '') + '|' + x.v + '|' + refDate() + '|' + SGK + '|' + LC.v;
     u._bc = u._bc || {}; if (u._bc[ym] && u._bc[ym].key === key) return u._bc[ym];
-    var R = s.rule, days = bcDays(ym), first = days[0], last = days[days.length - 1], rows = (u.data.CC || {})[ym] || [], byKey = {}, dataEnd = '';
+    var storedCC = HR.tableMap(u.data.CC), R = s.rule, days = bcDays(ym), first = days[0], last = days[days.length - 1], rows = storedCC[ym] || [], byKey = {}, dataEnd = '';
     rows = HR.tableRows(rows);
     var donRows = HR.tableRows(u.data.DON);
     if (!deviceOnly) rows.forEach(function (r) { var d = String(r['Ngày'] || '').slice(0, 10); if (!d || !r['Mã NV']) return; byKey[r['Mã NV'] + '|' + d] = r; if (d > dataEnd) dataEnd = d; });
@@ -11503,7 +11569,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (!u || !u.data || typeof u.data !== 'object') return { NV: [], PB: [], HD: [], LS: [], DON: [], QP: [], CC: {}, BL: {} };
     var x = bcX(u), key = (u.ver || 0) + '|' + (u.ccset ? u.ccset.at : '') + '|' + x.v + '|' + refDate() + '|' + bcSynEnd(u);
     if (u._ccd && u._ccd.key === key) return u._ccd.d;
-    var storedCC = u.data.CC && typeof u.data.CC === 'object' && !Array.isArray(u.data.CC) ? u.data.CC : {}, ms = {}; Object.keys(storedCC).forEach(function (m) { ms[m] = 1; }); Object.keys(x.lock).forEach(function (m) { ms[m] = 1; }); Object.keys(u.wifi || {}).forEach(function (m) { ms[m] = 1; }); if (bcSynEnd(u)) ms[HR.isoToday().slice(0, 7)] = 1;
+    var storedCC = HR.tableMap(u.data.CC), ms = {}; Object.keys(storedCC).forEach(function (m) { ms[m] = 1; }); Object.keys(x.lock).forEach(function (m) { ms[m] = 1; }); Object.keys(u.wifi || {}).forEach(function (m) { ms[m] = 1; }); if (bcSynEnd(u)) ms[HR.isoToday().slice(0, 7)] = 1;
     var CC = {}; Object.keys(ms).sort().forEach(function (ym) { var rows = bcRowsOf(bcMonth(u, ym)); if (rows.length) CC[ym] = rows; });
     var d = Object.assign({}, u.data, { CC: CC }); u._ccd = { key: key, d: d }; return d;
   }
