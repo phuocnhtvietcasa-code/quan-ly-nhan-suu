@@ -924,6 +924,16 @@ async function deleteMonthPunches(db, ym, mas) {
   }
   const results = await db.batch(st); return results.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
 }
+async function deleteMonthZktecoPunches(db, ym) {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(ym || '')); if (!m) return null;
+  const from = Date.UTC(+m[1], +m[2] - 1, 1) - VN, to = Date.UTC(+m[1], +m[2], 1) - VN;
+  const r = await db.prepare("DELETE FROM cham WHERE t >= ? AND t < ? AND LOWER(COALESCE(nguoi, '')) IN ('zkteco', 'tool')").bind(from, to).run();
+  return (r.meta && r.meta.changes) || 0;
+}
+function isFinalizedTimesheet(data) {
+  if (!data) return false;
+  try { const d = JSON.parse(data); return !!d && d.tam !== true; } catch (e) { return false; }
+}
 async function logReject(db, ma, ip, lyDo, req) {
   await db.prepare('INSERT INTO tu_choi (t, ma, ip, ly_do, tb, may) VALUES (?, ?, ?, ?, ?, ?)').bind(Date.now(), ma || null, ip, lyDo, shortUA(req.headers.get('user-agent')), req.may || null).run();
 }
@@ -1235,6 +1245,7 @@ async function api(req, env, url) {
       const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], groups = new Map(), seen = new Set();
       for (const x of list) {
         if (!x || typeof x !== 'object') continue;
+        const source = String(x.source || 'zkteco').trim().toLowerCase(); if (source !== 'zkteco' && source !== 'tool') continue;
         const ma = String(x.ma || '').trim().toUpperCase(), t = Number(x.t), loai = x.loai;
         if (!MA_RE.test(ma) || !Number.isSafeInteger(t) || t <= 0 || !['vao', 'ra'].includes(loai)) continue;
         const k = ma + ':' + t + ':' + loai;
@@ -1245,10 +1256,16 @@ async function api(req, env, url) {
         if (!g[loai] || (loai === 'vao' ? t < g.vao.t : t > g.ra.t)) g[loai] = event;
         groups.set(key, g);
       }
+      const closedMonths = new Set();
+      for (const ym of new Set([...groups.values()].map(g => isoVN(g.day).slice(0, 7)))) {
+        const rows = (await db.prepare('SELECT du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results;
+        if (rows.some(x => isFinalizedTimesheet(x.du_lieu))) closedMonths.add(ym);
+      }
       const st = []; let n = 0;
       for (const g of groups.values()) for (const loai of ['vao', 'ra']) {
         const event = g[loai]; if (!event) continue;
-        const rows = (await db.prepare('SELECT id, t, tb, ghi FROM cham WHERE ma = ? AND cach = \'may\' AND loai = ? AND t >= ? AND t < ? ORDER BY t')
+        const ym = isoVN(g.day).slice(0, 7); if (closedMonths.has(ym)) continue;
+        const rows = (await db.prepare("SELECT id, t, tb, ghi FROM cham WHERE ma = ? AND cach = 'may' AND LOWER(COALESCE(nguoi, '')) IN ('zkteco', 'tool') AND loai = ? AND t >= ? AND t < ? ORDER BY t")
           .bind(g.ma, loai, g.day, g.day + 864e5).all()).results;
         const best = rows.reduce((a, b) => !a || (loai === 'vao' ? b.t < a.t : b.t > a.t) ? b : a, null);
         const incomingWins = !best || (loai === 'vao' ? event.t < best.t : event.t > best.t);
@@ -1257,7 +1274,7 @@ async function api(req, env, url) {
           st.push(db.prepare("INSERT INTO cham (ma, t, loai, cach, ip, wifi, tb, ghi, nguoi) SELECT ?, ?, ?, 'may', '', 0, ?, ?, 'ZKTeco' WHERE EXISTS (SELECT 1 FROM nv WHERE ma = ?)")
             .bind(g.ma, value.t, loai, value.tb, value.ghi, g.ma));
         } else {
-          st.push(db.prepare('UPDATE cham SET t = ?, tb = ?, ghi = ? WHERE id = ?').bind(value.t, value.tb, value.ghi, best.id));
+          st.push(db.prepare("UPDATE cham SET t = ?, tb = ?, ghi = ?, nguoi = 'ZKTeco' WHERE id = ?").bind(value.t, value.tb, value.ghi, best.id));
           for (const row of rows) if (row.id !== best.id) st.push(db.prepare('DELETE FROM cham WHERE id = ?').bind(row.id));
         }
         n++;
@@ -1269,7 +1286,7 @@ async function api(req, env, url) {
       const tu = String(url.searchParams.get('tu') || ''), den = String(url.searchParams.get('den') || '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den)) return jc({ ok: false, loi: 'tu, den dạng YYYY-MM-DD' }, 400);
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
-      const rows = (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '' }));
+      const rows = (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '', source: /^(zkteco|tool)$/i.test(String(x.nguoi || '')) ? 'zkteco' : '' }));
       return jc({ ok: true, list: rows });
     }
     if (r === 'cham-xoa' && req.method === 'POST') {
@@ -1333,6 +1350,7 @@ async function api(req, env, url) {
     if (r === 'cong' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
       const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [], keep = new Set(list.map(x => String(x.ma || '').toUpperCase()));
+      const finalized = list.some(x => x && x.ma && x.du_lieu && typeof x.du_lieu === 'object' && x.du_lieu.tam === false);
       for (const x of list) {
         const ma = String(x.ma || '').toUpperCase(), dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000);
         const old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first();
@@ -1342,6 +1360,10 @@ async function api(req, env, url) {
       const remove = Array.isArray(body.remove) ? [...new Set(body.remove.slice(0, 2000).map(ma => String(ma || '').trim().toUpperCase()).filter(ma => MA_RE.test(ma) && !keep.has(ma)))] : [];
       remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
+      if (finalized) {
+        const rows = (await db.prepare('SELECT du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results;
+        if (rows.some(x => isFinalizedTimesheet(x.du_lieu))) await deleteMonthZktecoPunches(db, ym);
+      }
       await ccCalcClearMonth(db, cfg, ym);
       if (body.slot && body.source === 'device' && body.slot === cfg.cc_device_tinh_due) { await setCfg(db, { cc_device_tinh_due: '', cc_device_tinh_last_slot: body.slot }); cfg.cc_device_tinh_due = ''; cfg.cc_device_tinh_last_slot = body.slot; }
       else if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }

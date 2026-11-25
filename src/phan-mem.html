@@ -10597,6 +10597,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   var BC_LEAVE = [[/thai sản/i, 'TS'], [/ốm|bệnh/i, 'Ô'], [/không lương/i, 'KL'], [/việc riêng|kết hôn|cưới|tang|hiếu|hỷ/i, 'R'], [/phép/i, 'PN']];
   var BC_ISSUE = { 'don-cho': 'Có đơn nghỉ chờ duyệt', vang: 'Vắng chưa rõ lý do', 'thieu-cham': 'Thiếu lượt chấm', 'thieu-don': 'Thiếu đơn nghỉ', 'ky-hieu-la': 'Ký hiệu chưa khai báo', 'khong-du': 'Không đủ giờ tính công' };
   var BC_DAYK = { work: 'Ngày làm việc', half: 'Làm buổi sáng', rest: 'Nghỉ hằng tuần', hol: 'Nghỉ lễ, tết' };
+  var BC_DEVICE_ACTIVE = {};
   function bcX(u) { var x = u.ccx || (u.ccx = {}); x.m = x.m || {}; x.ok = x.ok || {}; x.lock = x.lock || {}; x.log = x.log || []; x.v = x.v || 0; return x; }
   function bcCode(s, k) { k = String(k || '').toUpperCase(); var hit = s.codes.filter(function (c) { return String(c.k).toUpperCase() === k; })[0]; if (hit) return hit; var legacy = k === 'P' ? 'PN' : k === 'PN' ? 'P' : ''; return legacy ? s.codes.filter(function (c) { return String(c.k).toUpperCase() === legacy; })[0] : null; }
   function bcDays(ym) { var y = +ym.slice(0, 4), m = +ym.slice(5, 7), n = new Date(Date.UTC(y, m, 0)).getUTCDate(), a = []; for (var d = 1; d <= n; d++) a.push(ccIso(y, m, d)); return a; }
@@ -10665,12 +10666,12 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   // Tính cả tháng của 1 công ty (có bộ nhớ đệm)
   function bcMonth(u, ym, sourceMode) {
-    var s = ccOf(u), x = bcX(u), LC = lcOf(u), SGK = bcSynEnd(u), SG = SGK.slice(0, 10), TD = HR.isoToday(), fileOnly = sourceMode === 'file', deviceOnly = sourceMode === 'device', key = ym + '|' + (fileOnly ? 'file' : deviceOnly ? 'device' : 'all') + '|' + (u.ver || 0) + '|' + (u.ccset ? u.ccset.at : '') + '|' + x.v + '|' + refDate() + '|' + SGK + '|' + LC.v;
+    var s = ccOf(u), x = bcX(u), LC = lcOf(u), SGK = bcSynEnd(u), SG = SGK.slice(0, 10), TD = HR.isoToday(), fileOnly = sourceMode === 'file', deviceOnly = sourceMode === 'device', modeKey = fileOnly ? 'file' : deviceOnly ? 'device' : sourceMode === 'with-device' ? 'with-device' : 'all', key = ym + '|' + modeKey + '|' + (u.ver || 0) + '|' + (u.ccset ? u.ccset.at : '') + '|' + x.v + '|' + refDate() + '|' + SGK + '|' + LC.v;
     u._bc = u._bc || {}; if (u._bc[ym] && u._bc[ym].key === key) return u._bc[ym];
     var R = s.rule, days = bcDays(ym), first = days[0], last = days[days.length - 1], rows = (u.data.CC || {})[ym] || [], byKey = {}, dataEnd = '';
     if (!deviceOnly) rows.forEach(function (r) { var d = String(r['Ngày'] || '').slice(0, 10); if (!d || !r['Mã NV']) return; byKey[r['Mã NV'] + '|' + d] = r; if (d > dataEnd) dataEnd = d; });
     if (SG && SG >= first && SAMPLE_REF < last) { var sgE = SG < last ? SG : last; if (sgE > dataEnd) dataEnd = sgE; } // 0.3.1: dữ liệu mẫu tự sinh lượt chấm từ sau ngày chốt mẫu đến hôm nay
-    var WM = fileOnly ? {} : wfMap(u, ym); Object.keys(WM).forEach(function (k) { if (WM[k].iso > dataEnd) dataEnd = WM[k].iso; }); // lượt chấm trên điện thoại chỉ dùng ở chế độ đồng bộ máy chấm công
+    var WM = fileOnly ? {} : wfMap(u, ym, sourceMode); Object.keys(WM).forEach(function (k) { if (WM[k].iso > dataEnd) dataEnd = WM[k].iso; }); // lượt chấm từ điện thoại; lượt ZKTeco chỉ được nhập sau khi tính tool
     var pend = {}; (u.data.DON || []).forEach(function (d) { if (d['Trạng thái'] === 'Chờ duyệt' && d['Từ ngày']) (pend[d['Mã NV']] = pend[d['Mã NV']] || []).push({ from: String(d['Từ ngày']).slice(0, 10), to: String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10), t: d['Loại nghỉ'], so: d['Số đơn'] }); });
     var XC = xmCfg(s, u), XMB = {}, XRK = { 'Đã duyệt': 3, 'Chờ duyệt': 2, 'Từ chối': 1 }; xmList(u).forEach(function (x) { var o = XMB[x.ma + '|' + x.ngay] = XMB[x.ma + '|' + x.ngay] || {}, cur = o[x.kieu]; if (!cur || (XRK[x.trang_thai] || 0) > (XRK[cur.trang_thai] || 0)) o[x.kieu] = x; }); // 16/11: đơn xin đi muộn / về sớm
     var dons = {}; (u.data.DON || []).forEach(function (d) { if (d['Trạng thái'] !== 'Đã duyệt' || !d['Từ ngày']) return; var t = String(d['Loại nghỉ'] || ''), trip = /^đi công tác$/i.test(t), code = trip ? 'CT' : 'PN'; BC_LEAVE.some(function (b) { if (b[0].test(t)) { code = b[1]; return true; } }); (dons[d['Mã NV']] = dons[d['Mã NV']] || []).push({ from: String(d['Từ ngày']).slice(0, 10), to: String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10), code: code, so: d['Số đơn'], t: t, trip: trip, half: /phép nửa ngày/i.test(t), buoi: d._buoi || d['Buổi'] || 'sang' }); });
@@ -10888,7 +10889,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     sourceMode = sourceMode === 'file' || sourceMode === 'device' ? sourceMode : '';
     return ready.then(function () { return wfCalcPull(u, ym, demo, sourceMode === 'file'); }).then(function () {
       bcX(u).v++; u._bc = {}; u._ccd = null; bcMonth(u, ym, sourceMode);
-      var X = bcX(u); return wfSendCong(u, ym, !X.lock[ym], '', sourceMode).then(function (n) { u._bc = {}; u._ccd = null; saveUnits(); return n; });
+      var X = bcX(u); return wfSendCong(u, ym, !X.lock[ym], '', sourceMode).then(function (n) { if (sourceMode === 'device') BC_DEVICE_ACTIVE[u.id + '|' + ym] = 1; u._bc = {}; u._ccd = null; saveUnits(); return n; });
     });
   }
   function bcAutoProcess(u, j, currentYm) {
@@ -10903,7 +10904,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (!j.deviceAuto || !j.deviceDue) return Promise.resolve(0);
     return wfCalcPull(u, currentYm, !wfOn(u), false).then(function () {
       var X = bcX(u); X.v++; u._bc = {}; u._ccd = null; bcMonth(u, currentYm, 'device');
-      return wfSendCong(u, currentYm, !X.lock[currentYm], j.deviceDue, 'device');
+      return wfSendCong(u, currentYm, !X.lock[currentYm], j.deviceDue, 'device').then(function (n) { BC_DEVICE_ACTIVE[u.id + '|' + currentYm] = 1; return n; });
     });
   }
 
@@ -10911,7 +10912,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (!S.units.length) return pageHead('Tổng hợp công') + noData('dữ liệu chấm công');
     var ms = bcMonths(), f = ps('bc', { m: '', view: 'grid', q: '', dept: '', only: false, u: '', k: 'all' }), uAll = selUnits(), u0 = bcUnit(); if (!khoiBoth()) f.k = 'all'; // 20/11: công ty 1 khối – không hiện chọn khối // 11/11 09:12 anh: mỗi công ty 1 tab, mỗi khối 1 bảng
     if (ms.indexOf(f.m) < 0) f.m = ms.filter(function (m) { return m <= refDate().slice(0, 7) && selUnits().some(function (u) { return (u.data.CC || {})[m]; }); }).pop() || ms[ms.length - 1];
-    var us = [u0], res = us.map(function (u) { return bcMonth(u, f.m); }), T = { n: 0, work: 0, paid: 0, issues: 0, ot: 0, otWait: 0, manual: 0, otPay: 0, late: 0, hours: 0, night: 0 }, NK = { vp: 0, sx: 0 };
+    var us = [u0], res = us.map(function (u) { return bcMonth(u, f.m, BC_DEVICE_ACTIVE[u.id + '|' + f.m] ? 'with-device' : ''); }), T = { n: 0, work: 0, paid: 0, issues: 0, ot: 0, otWait: 0, manual: 0, otPay: 0, late: 0, hours: 0, night: 0 }, NK = { vp: 0, sx: 0 };
     res.forEach(function (r) { r.ppl.forEach(function (p) { NK[p.exc.sch ? 'sx' : 'vp']++; }); });
     res.forEach(function (r) { r.ppl.forEach(function (p) { if (!bcInK(p, f.k)) return; T.n++; T.hours += p.exc.hr ? p.sum.hours : 0; T.night += p.sum.night || 0; T.work += p.sum.work; T.paid += p.sum.paid + p.sum.hol; T.issues += p.sum.issues; T.ot += p.sum.otN + p.sum.otR + p.sum.otH; T.otWait += p.sum.otWait; T.manual += p.sum.manual; T.otPay += p.sum.otPay; T.late += p.sum.late; }); });
     var lockBar = '<div class="bc-locks">' + res.map(function (r) {
@@ -11278,7 +11279,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   };
   /* ----- Chốt công tháng ----- */
   ACTS['bc-lock'] = function (a, uid) {
-    var u = unitById(uid), ym = PS.bc.m, r = bcMonth(u, ym), iss = 0, wait = 0, n = r.ppl.length; r.ppl.forEach(function (p) { iss += p.sum.issues; wait += p.sum.otWait; });
+    var u = unitById(uid), ym = PS.bc.m, r = bcMonth(u, ym, BC_DEVICE_ACTIVE[u.id + '|' + ym] ? 'with-device' : ''), iss = 0, wait = 0, n = r.ppl.length; r.ppl.forEach(function (p) { iss += p.sum.issues; wait += p.sum.otWait; });
     var future = r.days[r.days.length - 1] > refDate();
     var m = modal('Chốt công tháng ' + HR.ymLabel(ym), shortUnit(u.name),
       '<ul class="bc-chk"><li class="' + (iss ? 'bad' : 'ok') + '">' + (iss ? iss + ' ô cần xử lý (vắng chưa rõ, thiếu chấm, thiếu đơn…)' : 'Không còn ô cần xử lý') + '</li>' +
@@ -11293,7 +11294,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       X.lock[ym] = { by: by, at: nowVn(), ts: Date.now(), issues: iss, wait: wait, sum: r.ppl.map(function (p) { return { id: p.id, name: p.name, work: p.sum.work, paid: p.sum.paid, hol: p.sum.hol, salary: p.sum.salary, bh: p.sum.bh, unpaid: p.sum.unpaid, otN: p.sum.otN, otR: p.sum.otR, otH: p.sum.otH, otPay: Math.round(p.sum.otPay * 100) / 100 }; }) };
       bcLogAdd(u, { ym: ym, what: 'Chốt công tháng', nw: n + ' người' + (iss ? ', còn ' + iss + ' ô cần xử lý' : '') + (wait ? ', ' + ccNum(wait) + 'h tăng ca chưa xác nhận' : ''), by: by }); X.log[X.log.length - 1].after = false;
       bcSaveX(u, 'chốt công ' + ym); m.close(); toast('Đã chốt công tháng ' + HR.ymLabel(ym), 'ok', wfOn(u) ? 'Đang gửi công từng người lên điện thoại để nhân viên xác nhận…' : ''); render();
-      if (wfOn(u)) wfSendCong(u, ym, false).then(function (k) { wfLog(u, 'Đã gửi công tháng ' + HR.ymLabel(ym) + ' cho ' + k + ' nhân viên xác nhận'); saveUnits(); toast('Đã gửi công tháng ' + HR.ymLabel(ym) + ' cho ' + k + ' nhân viên xác nhận', 'ok'); render(); }, function (er) { wfLog(u, 'Chưa gửi được công ' + ym + ': ' + er.message, false); saveUnits(); toast('Chưa gửi được công lên điện thoại', 'err', er.message + ' Bấm Đồng bộ ở trang Chấm công Wi‑Fi để gửi lại.'); });
+      if (wfOn(u)) wfSendCong(u, ym, false, '', BC_DEVICE_ACTIVE[u.id + '|' + ym] ? 'with-device' : '').then(function (k) { if (u.wf.punches) delete u.wf.punches[ym]; delete BC_DEVICE_ACTIVE[u.id + '|' + ym]; wfLog(u, 'Đã gửi công tháng ' + HR.ymLabel(ym) + ' cho ' + k + ' nhân viên xác nhận'); saveUnits(); toast('Đã gửi công tháng ' + HR.ymLabel(ym) + ' cho ' + k + ' nhân viên xác nhận', 'ok'); render(); }, function (er) { wfLog(u, 'Chưa gửi được công ' + ym + ': ' + er.message, false); saveUnits(); toast('Chưa gửi được công lên điện thoại', 'err', er.message + ' Bấm Đồng bộ ở trang Chấm công Wi‑Fi để gửi lại.'); });
     });
   };
   ACTS['bc-unlock'] = function (a, uid) {
@@ -11634,9 +11635,11 @@ if (typeof module !== 'undefined') module.exports = XW;
   function wfIso(t) { var d = new Date(t + 7 * 3600e3); return d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()); }
   function wfHM(t) { var d = new Date(t + 7 * 3600e3); return p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()); }
   // lượt chấm 1 tháng → giờ vào đầu tiên, giờ ra cuối cùng mỗi người mỗi ngày
-  function wfMap(u, ym) {
+  function wfMap(u, ym, sourceMode) {
     var list = (u.wf && u.wf.punches && u.wf.punches[ym]) || [], o = {};
     list.slice().sort(function (a, b) { return a.t - b.t; }).forEach(function (x) {
+      var tool = x.source === 'zkteco' || (!x.source && x.cach === 'may');
+      if (sourceMode === 'device' ? !tool : sourceMode !== 'with-device' && tool) return;
       var k = x.ma + '|' + wfIso(x.t), r = o[k] || (o[k] = { tin: '', tout: '', n: 0, cach: {}, iso: wfIso(x.t) }); r.n++; r.cach[x.cach] = 1;
       if (x.loai === 'vao') { if (!r.tin) r.tin = wfHM(x.t); } else r.tout = wfHM(x.t);
     });

@@ -1,6 +1,8 @@
-"""Sync the last seven days of ZKTeco attendance logs to the HRM worker."""
+"""Sync ZKTeco attendance logs for a selected month to the HRM worker."""
 
-from datetime import datetime, timedelta
+import argparse
+import re
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
@@ -22,8 +24,36 @@ STATUS_TO_TYPE = {0: "vao", 1: "ra", 2: "ra", 3: "vao", 4: "vao", 5: "ra"}
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
-def collect_logs():
-    cutoff = datetime.now(VN_TZ) - timedelta(days=7)
+def current_month():
+    return datetime.now(VN_TZ).strftime("%Y-%m")
+
+
+def selected_month():
+    parser = argparse.ArgumentParser(description="Sync ZKTeco attendance logs for one month.")
+    parser.add_argument("month_pos", nargs="?", metavar="YYYY-MM")
+    parser.add_argument("--month", dest="month_option", metavar="YYYY-MM")
+    parser.add_argument("--auto", action="store_true", help="Use the current month without prompting.")
+    args = parser.parse_args()
+
+    if args.month_pos and args.month_option:
+        parser.error("choose either positional YYYY-MM or --month YYYY-MM")
+    if args.auto and (args.month_pos or args.month_option):
+        parser.error("--auto uses the current month and cannot be combined with a month")
+
+    month = args.month_option or args.month_pos
+    if args.auto:
+        month = current_month()
+    elif not month:
+        month = input("Nhap thang can dong bo (YYYY-MM, Enter = thang hien tai): ").strip()
+        month = month or current_month()
+
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        parser.error("month must use YYYY-MM with a month from 01 to 12")
+    return month
+
+
+def collect_logs(month):
+    """Collect the selected month, interpreting device timestamps in Vietnam time."""
     zk = ZK(DEVICE_IP, port=DEVICE_PORT, timeout=10, password=COMM_KEY, force_udp=False)
     connection = None
     try:
@@ -35,11 +65,14 @@ def collect_logs():
                 continue
             timestamp = record.timestamp
             timestamp = timestamp.replace(tzinfo=VN_TZ) if timestamp.tzinfo is None else timestamp.astimezone(VN_TZ)
-            if timestamp < cutoff:
+            if timestamp.strftime("%Y-%m") != month:
                 continue
 
             user_id = str(record.user_id).strip()
-            ma = str(USER_ID_TO_MA.get(user_id, user_id)).strip().upper()
+            ma = USER_ID_TO_MA.get(user_id)
+            if ma is None:
+                ma = user_id.zfill(5) if user_id.isdigit() else user_id
+            ma = str(ma).strip().upper()
             try:
                 punch = int(record.punch or 0)
             except (TypeError, ValueError):
@@ -54,6 +87,7 @@ def collect_logs():
                 "tb": f"ZKTeco {DEVICE_IP}",
                 "ghi": f"status={record.status}, punch={record.punch}",
                 "loai": STATUS_TO_TYPE.get(punch),
+                "source": "zkteco",
             }
             grouped.setdefault((ma, timestamp.date().isoformat()), []).append(event)
 
@@ -104,13 +138,16 @@ def main():
     if not API_KEY or API_KEY == "PASTE_CONNECTION_CODE_HERE":
         raise RuntimeError("Set API_KEY to the connection code from the HRM settings.")
 
-    logs = collect_logs()
+    month = selected_month()
+    logs = collect_logs(month)
     if not logs:
-        print("No attendance logs from the last 7 days.")
+        print(f"No attendance logs for {month}.")
         return
 
     uploaded = upload_logs(logs)
-    print(f"Imported {uploaded} of {len(logs)} attendance logs.")
+    dates = [datetime.fromtimestamp(x["t"] / 1000, VN_TZ).date().isoformat() for x in logs]
+    employees = ", ".join(sorted({x["ma"] for x in logs}))
+    print(f"Imported {uploaded}/{len(logs)} logs for {month} ({min(dates)} to {max(dates)}); employees: {employees}.")
 
 
 if __name__ == "__main__":
