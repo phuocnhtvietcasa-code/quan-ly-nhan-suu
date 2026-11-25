@@ -3243,7 +3243,7 @@ var HR = (function () {
     return dates[dates.length - 1] || requestStart(x);
   }
   function tableRows(v) {
-    if (typeof v === 'string') { try { return tableRows(JSON.parse(v)); } catch (e) { return []; } }
+    if (typeof v === 'string') { try { return tableRows(JSON.parse(v)); } catch (e) { if (typeof console !== 'undefined' && console.error) console.error('LỖI – đọc bảng dữ liệu JSON', e); return []; } }
     if (Array.isArray(v)) return v.filter(function (x) { return x && typeof x === 'object'; });
     if (!v || typeof v !== 'object') return [];
     if (['Mã NV', 'Mã phòng ban', 'Tên phòng ban', 'Ngày', 'Số đơn', 'ma', 'so', 'ngay', 'id', 'employeeId', 'employee_id', 'code', 'date', 'from', 'to', 'tuNgay', 'denNgay', 'ngayTrucCN', 'ngayNghiBuT7', 'contractId', 'kieu', 'loai', 'type'].some(function (k) { return Object.prototype.hasOwnProperty.call(v, k); })) return [v];
@@ -3261,7 +3261,7 @@ var HR = (function () {
   }
   function tableMap(v) {
     var out = {};
-    if (typeof v === 'string') { try { return tableMap(JSON.parse(v)); } catch (e) { return out; } }
+    if (typeof v === 'string') { try { return tableMap(JSON.parse(v)); } catch (e) { if (typeof console !== 'undefined' && console.error) console.error('LỖI – đọc bảng dữ liệu theo tháng JSON', e); return out; } }
     if (Array.isArray(v)) {
       v.forEach(function (x) {
         if (!x || typeof x !== 'object') return;
@@ -3978,8 +3978,9 @@ if (typeof module !== 'undefined') module.exports = XW;
   function logErr(ctx, e) {
     var detail = 'Không rõ lỗi';
     try { detail = e && e.stack ? e.stack : String(e); } catch (ignore) { }
+    try { if (window.console && console.error) console.error('LỖI – ' + ctx, e); } catch (ignoreConsole) { }
     try { log('LỖI – ' + ctx + ': ' + detail); }
-    catch (ignoreLog) { try { if (window.console && console.error) console.error('LỖI – ' + ctx + ': ' + detail); } catch (ignoreConsole) { } }
+    catch (ignoreLog) { }
   }
 
   /* ---------------- Lưu trữ trên trình duyệt (IndexedDB) ---------------- */
@@ -4772,6 +4773,10 @@ if (typeof module !== 'undefined') module.exports = XW;
       if (headSet[key(p)] || /trưởng (phòng|bộ phận|ban|nhóm|ca)|tổ trưởng|quản lý/i.test(t)) return 'head';
       return '';
     }
+    var roleCounts = { lead: 0, head: 0 };
+    d.people.forEach(function (p) { var role = roleOf(p); if (role) roleCounts[role]++; });
+    var nNew = d.people.filter(function (p) { return isNew[key(p)]; }).length;
+    var nVac = d.depts.reduce(function (n, x) { return n + (typeof x.plan === 'number' && isFinite(x.plan) ? Math.max(0, x.plan - (x.working || 0) - (x.maternity || 0)) : 0); }, 0);
     function seat(p, left) {
       var e = p.e, k = key(p), rl = left ? '' : roleOf(p), c = (left ? 'left' : (p.state === 'maternity' ? 'mat' : '') + (prob[k] ? ' prob' : '')) + (rl ? ' ' + rl : '');
       var tip = e['Họ và tên'] + ' · ' + (e['Chức danh công việc'] || e['Chức vụ'] || '') + (rl === 'lead' ? ' · lãnh đạo' : rl === 'head' ? ' · trưởng bộ phận' : '') + (p.state === 'maternity' && !left ? ' · nghỉ thai sản' : '') + (prob[k] ? ' · đang thử việc' : '') + (isNew[k] ? ' · mới vào tháng này' : '') + (left ? ' · đã nghỉ việc ' + HR.vnDate(e['Ngày nghỉ việc']) : '');
@@ -4790,7 +4795,6 @@ if (typeof module !== 'undefined') module.exports = XW;
       var ps = d.people.filter(function (p) { return p.unit === x.unit && (p.e['Phòng ban'] || '(Chưa ghi phòng ban)') === x.name; });
       var lf = d.moves.left.filter(function (p) { return p.unit === x.unit && p.e['Phòng ban'] === x.name; });
       var empty = x.plan !== null ? Math.max(0, x.plan - ps.length) : 0, over = x.plan !== null && ps.length > x.plan;
-      if (!ps.length && !lf.length && !empty) return '';
       var uh = '';
       if (multi && x.unit !== prevU) { prevU = x.unit; var nU = d.people.filter(function (p) { return p.unit === x.unit; }).length; uh = '<div class="db-unit-h"><b>' + esc(shortUnit(x.unit)) + '</b><span class="n">' + nU + ' người</span></div>'; }
       var rk = { lead: 0, head: 1, '': 2 };
@@ -4802,8 +4806,10 @@ if (typeof module !== 'undefined') module.exports = XW;
     var mv = d.moves;
     return '<div class="card card-pad db-team"><div class="card-head"><div><h3>Đội ngũ</h3><p>Xếp theo bộ phận · bấm vào từng người để xem thông tin</p></div><button type="button" class="btn btn-sm" data-act="list" data-list="staff">Danh sách</button></div>' +
       '<div class="db-total"><button type="button" class="big num" data-act="list" data-list="staff">' + d.staff.active + '</button><span class="lab">người đang làm</span>' +
-      '<span class="db-chips"><span class="db-chip"><b>' + d.staff.working + '</b> đang đi làm</span>' + (d.staff.maternity ? '<span class="db-chip mat"><b>' + d.staff.maternity + '</b> nghỉ thai sản</span>' : '') + (nProb ? '<span class="db-chip prob"><b>' + nProb + '</b> thử việc</span>' : '') +
-      '<span class="db-chip">Tháng ' + HR.ymLabel(mv.month) + ': <b class="up">+' + mv.joined.length + '</b> · <b class="' + (mv.left.length ? 'down' : '') + '">−' + mv.left.length + '</b></span></span></div>' +
+      '<span class="db-chips"><span class="db-chip"><b>' + roleCounts.lead + '</b> Giám đốc</span><span class="db-chip"><b>' + roleCounts.head + '</b> Trưởng bộ phận</span>' +
+      '<span class="db-chip"><b>' + d.staff.working + '</b> Đang đi làm</span><span class="db-chip mat"><b>' + d.staff.maternity + '</b> Nghỉ thai sản</span>' +
+      '<span class="db-chip prob"><b>' + nProb + '</b> Thử việc</span><span class="db-chip"><b>' + nNew + '</b> Mới vào</span>' +
+      '<span class="db-chip"><b>' + mv.left.length + '</b> Đã nghỉ trong tháng</span><span class="db-chip"><b>' + nVac + '</b> Chỗ trống theo định biên</span></span></div>' +
       (rows || '<p class="muted">Chưa có dữ liệu nhân viên.</p>') +
       (dots ? '' : '<div class="db-leg"><span><i class="seat-lg lead"></i>Giám đốc</span><span><i class="seat-lg head"></i>Trưởng bộ phận</span><span><i class="seat-lg"></i>Đang đi làm</span><span><i class="seat-lg mat"></i>Nghỉ thai sản</span><span><i class="seat-lg prob"></i>Thử việc</span><span><i class="seat-lg new"></i>Mới vào</span><span><i class="seat-lg left"></i>Đã nghỉ trong tháng</span><span><i class="seat-lg vac"></i>Chỗ trống theo định biên</span></div>') + '</div>';
   }
@@ -5550,7 +5556,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     return ACACHE.list;
   }
   function isDone(a) { return !!S.done[a.key]; }
-  function navBadge() { if (!S.units.length) return 0; try { var L = alertList(); try { alPendCheck(L); } catch (e2) { } return L.filter(function (a) { return a.level !== 'nhac' && !isDone(a); }).length; } catch (e) { return 0; } }
+  function navBadge() { if (!S.units.length) return 0; try { var L = alertList(); try { alPendCheck(L); } catch (e2) { if (typeof console !== 'undefined' && console.error) console.error('LỖI – cập nhật trạng thái việc chờ duyệt', e2); } return L.filter(function (a) { return a.level !== 'nhac' && !isDone(a); }).length; } catch (e) { if (typeof console !== 'undefined' && console.error) console.error('LỖI – đếm việc cần xử lý', e); return 0; } }
 
   /* ---------------- Bảng dữ liệu dùng chung (sắp xếp, hiện thêm, xuất Excel) ---------------- */
   var TB = {};
@@ -11970,7 +11976,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (Array.isArray(raw)) return raw;
     if (typeof raw === 'string') {
       var t = raw.trim();
-      if (t && (t.charAt(0) === '[' || t.charAt(0) === '{')) { try { return pqChainItems(JSON.parse(t)); } catch (e) { } }
+      if (t && (t.charAt(0) === '[' || t.charAt(0) === '{')) { try { return pqChainItems(JSON.parse(t)); } catch (e) { if (typeof console !== 'undefined' && console.error) console.error('LỖI – đọc chuỗi người duyệt đơn JSON', e); } }
       return t ? [t] : [];
     }
     if (typeof raw === 'number') return raw ? [raw] : [];
@@ -11988,7 +11994,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     return raw.approverId || raw.approverName || raw.ma || raw.ten || raw.id || raw.name ? [raw] : [];
   }
   function pqHistoryItems(raw) {
-    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { return []; } }
+    if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { if (typeof console !== 'undefined' && console.error) console.error('LỖI – đọc lịch sử phê duyệt đơn JSON', e); return []; } }
     if (Array.isArray(raw)) return raw.filter(function (x) { return x && typeof x === 'object'; }).map(function (x, i) { return x.step == null ? Object.assign({ step: i + 1 }, x) : x; });
     if (!raw || typeof raw !== 'object') return [];
     if (raw.approvalHistory != null) return pqHistoryItems(raw.approvalHistory);
