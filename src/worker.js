@@ -577,7 +577,7 @@ async function ccCalcApi(r, db, cfg, body, url, req, now, jc) {
     }
     if (cfg.cc_tinh_auto == null) cfg.cc_tinh_auto = '0';
     if (cfg.cc_device_tool_auto == null) cfg.cc_device_tool_auto = '0';
-    const active = !!Number(cfg.cc_tinh_active_at || 0);
+    const active = now - (Number(cfg.cc_tinh_active_at) || 0) <= 30 * 60e3;
     return jc({ ok: true, auto: cfg.cc_tinh_auto === '1', deviceAuto: cfg.cc_device_tool_auto === '1', active, deviceActive: active });
   }
   if (r === 'cong-tinh' && req.method === 'GET' && url.searchParams.has('ym')) {
