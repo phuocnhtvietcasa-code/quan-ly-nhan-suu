@@ -15,7 +15,7 @@ API_URL = "https://quan-ly-nhan-suu.phuoc-nhtvietcasa.workers.dev/api/sync/cham"
 API_KEY = "QTT-25053D388F2DC2BA809B927A"
 
 # Optional mapping when device user IDs differ from employee codes.
-USER_ID_TO_MA = {}
+USER_ID_TO_MA = {"4": "00004", "5": "00005", "8": "00008", "13": "00016", "18": "00018", "19": "00019"}
 
 API_BATCH_SIZE = 500
 STATUS_TO_TYPE = {0: "vao", 1: "ra", 2: "ra", 3: "vao", 4: "vao", 5: "ra"}
