@@ -1009,7 +1009,7 @@ const QT_SYNC_MODS = {
   'nhan-vien': ['ccwifi', 'appnv', 'nv'], pin: ['ccwifi', 'appnv', 'nv'], 'doi-ma': ['ccwifi', 'appnv', 'nv'], 'mo-khoa': ['ccwifi', 'appnv', 'nv'],
   cong: ['ccwifi', 'cc', 'np'], 'cong-tinh': ['ccwifi', 'cc'], 'cong-tinh-cfg': ['ccwifi', 'cc'], 'don-cap-nhat': ['ccwifi', 'np', 'cc'], 'xm-cap-nhat': ['ccwifi', 'cc', 'np'], lich: ['ccwifi', 'cc', 'tlsx'],
   phieu: ['ccwifi', 'phieuluong', 'bl', 'chiluong'], 'phieu-tra-loi': ['ccwifi', 'phieuluong', 'bl', 'chiluong'],
-  'ho-so': ['ccwifi', 'nv', 'hoso', 'hd', 'appnv'], 'kho-file': ['ccwifi', 'nv', 'hoso', 'hd'], 'kho-xoa': ['ccwifi', 'nv', 'hoso', 'hd'], 'cham-xoa': ['ccwifi', 'cc']
+  'ho-so': ['ccwifi', 'nv', 'hoso', 'hd', 'appnv'], 'kho-file': ['ccwifi', 'nv', 'hoso', 'hd'], 'kho-xoa': ['ccwifi', 'nv', 'hoso', 'hd'], cham: ['ccwifi', 'cc'], 'cham-xoa': ['ccwifi', 'cc']
 };
 // phần phân quyền dùng để so: chỉ quản trị viên được đổi (bỏ các trường thay đổi khi dùng bình thường, như lần đăng nhập gần nhất)
 function pqCore(pq) { if (!pq) return null; return { on: !!pq.on, roles: pq.roles || [], users: (pq.users || []).map(u => ({ id: u.id, nv: u.nv || '', user: u.user, role: u.role, dv: u.dv, pb: u.pb, off: !!u.off })) }; }
@@ -1220,7 +1220,41 @@ async function api(req, env, url) {
     // 12/11/2026: trang Ứng dụng nhân viên của phần mềm – trạng thái tài khoản (đăng nhập lần cuối, đang khóa tạm do nhập sai PIN), mở khóa
     if (r === 'tai-khoan') return jc({ ok: true, now, list: (await db.prepare('SELECT ma, active, pin IS NOT NULL AS co_pin, fail, lock_until, login_at, pin_doi FROM nv').all()).results });
     if (r === 'mo-khoa' && req.method === 'POST') { const ma = String(body.ma || '').trim().toUpperCase(); await db.prepare('UPDATE nv SET fail = 0, lock_until = 0 WHERE ma = ?').bind(ma).run(); return jc({ ok: true }); }
-    if (r === 'cham') {
+    if (r === 'cham' && req.method === 'POST') {
+      const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], groups = new Map(), seen = new Set();
+      for (const x of list) {
+        if (!x || typeof x !== 'object') continue;
+        const ma = String(x.ma || '').trim().toUpperCase(), t = Number(x.t), loai = x.loai;
+        if (!MA_RE.test(ma) || !Number.isSafeInteger(t) || t <= 0 || !['vao', 'ra'].includes(loai)) continue;
+        const k = ma + ':' + t + ':' + loai;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const day = vnDayStart(t), key = ma + ':' + day, event = { t, tb: String(x.tb || 'ZKTeco').slice(0, 120), ghi: String(x.ghi || '').slice(0, 200) };
+        const g = groups.get(key) || { ma, day, vao: null, ra: null };
+        if (!g[loai] || (loai === 'vao' ? t < g.vao.t : t > g.ra.t)) g[loai] = event;
+        groups.set(key, g);
+      }
+      const st = []; let n = 0;
+      for (const g of groups.values()) for (const loai of ['vao', 'ra']) {
+        const event = g[loai]; if (!event) continue;
+        const rows = (await db.prepare('SELECT id, t, tb, ghi FROM cham WHERE ma = ? AND cach = \'may\' AND loai = ? AND t >= ? AND t < ? ORDER BY t')
+          .bind(g.ma, loai, g.day, g.day + 864e5).all()).results;
+        const best = rows.reduce((a, b) => !a || (loai === 'vao' ? b.t < a.t : b.t > a.t) ? b : a, null);
+        const incomingWins = !best || (loai === 'vao' ? event.t < best.t : event.t > best.t);
+        const value = incomingWins ? event : best;
+        if (!best) {
+          st.push(db.prepare("INSERT INTO cham (ma, t, loai, cach, ip, wifi, tb, ghi, nguoi) SELECT ?, ?, ?, 'may', '', 0, ?, ?, 'ZKTeco' WHERE EXISTS (SELECT 1 FROM nv WHERE ma = ?)")
+            .bind(g.ma, value.t, loai, value.tb, value.ghi, g.ma));
+        } else {
+          st.push(db.prepare('UPDATE cham SET t = ?, tb = ?, ghi = ? WHERE id = ?').bind(value.t, value.tb, value.ghi, best.id));
+          for (const row of rows) if (row.id !== best.id) st.push(db.prepare('DELETE FROM cham WHERE id = ?').bind(row.id));
+        }
+        n++;
+      }
+      for (let i = 0; i < st.length; i += 200) await db.batch(st.slice(i, i + 200));
+      return jc({ ok: true, n });
+    }
+    if (r === 'cham' && req.method === 'GET') {
       const tu = String(url.searchParams.get('tu') || ''), den = String(url.searchParams.get('den') || '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den)) return jc({ ok: false, loi: 'tu, den dạng YYYY-MM-DD' }, 400);
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
