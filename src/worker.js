@@ -220,13 +220,14 @@ const VB_PART = 700000, VB_MAX = 10 * 1024 * 1024;
 function tbDen(r) { try { return JSON.parse(r.den || '{}') || {}; } catch (e) { return {}; } }
 function tbHop(r, me, H) { const d = tbDen(r); if (r.cty && H.cty && r.cty !== H.cty) return false; return d.all ? true : Array.isArray(d.ma) && d.ma.length ? d.ma.includes(me) : Array.isArray(d.pb) && d.pb.length ? d.pb.includes(H.pb || '') : false; }
 async function tbNguoiNhan(db, demo, r) { const BY = await hsLite(db, demo); return Object.keys(BY).filter(ma => tbHop(r, ma, BY[ma])); }
-// Giữ nguyên lược đồ D1: metadata buổi nghỉ và ảnh được gói cùng lý do trong cột ly_do.
+// Giữ nguyên lược đồ D1: metadata buổi nghỉ, ảnh và lịch trực cuối tuần được gói cùng lý do trong cột ly_do.
 const REQ_META_PREFIX = '\u001fREQ1:';
+const WEEKEND_DUTY_TYPE = 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7';
 function requestText(raw) {
   const s = String(raw || '');
-  if (s.indexOf(REQ_META_PREFIX) !== 0) return { ly_do: s, buoi: '', anh: [] };
-  try { const x = JSON.parse(s.slice(REQ_META_PREFIX.length)); return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [] }; }
-  catch (e) { return { ly_do: s, buoi: '', anh: [] }; }
+  if (s.indexOf(REQ_META_PREFIX) !== 0) return { ly_do: s, buoi: '', anh: [], ngayTrucCN: '', ngayNghiBuT7: '' };
+  try { const x = JSON.parse(s.slice(REQ_META_PREFIX.length)); return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [], ngayTrucCN: String(x.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || '') }; }
+  catch (e) { return { ly_do: s, buoi: '', anh: [], ngayTrucCN: '', ngayNghiBuT7: '' }; }
 }
 function requestPhotos(value) {
   if (value == null) return [];
@@ -235,11 +236,16 @@ function requestPhotos(value) {
   for (const x of value) { const v = String(x || ''); if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(v) || v.length > 600000) return null; out.push(v); }
   return out;
 }
-function requestTextPack(reason, buoi, photos) {
+function requestTextPack(reason, buoi, photos, dates) {
   const a = requestPhotos(photos); if (!a) return null;
   const r = String(reason || '').trim().slice(0, 300), b = ['sang', 'chieu'].includes(String(buoi || '')) ? String(buoi) : '';
-  if (!b && !a.length) return r;
-  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a }); return packed.length <= 1700000 ? packed : null;
+  const ngayTrucCN = String(dates && dates.ngayTrucCN || ''), ngayNghiBuT7 = String(dates && dates.ngayNghiBuT7 || '');
+  if (!b && !a.length && !ngayTrucCN && !ngayNghiBuT7) return r;
+  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a, ngayTrucCN, ngayNghiBuT7 }); return packed.length <= 1700000 ? packed : null;
+}
+function weekendDutyDates(d) {
+  const x = requestText(d && d.ly_do), ngayTrucCN = x.ngayTrucCN, ngayNghiBuT7 = x.ngayNghiBuT7;
+  return ISO_RE.test(ngayTrucCN) && ISO_RE.test(ngayNghiBuT7) && isoDowW(ngayTrucCN) === 0 && isoDowW(ngayNghiBuT7) === 6 && addDaysIso(ngayNghiBuT7, 1) === ngayTrucCN ? { ngayTrucCN, ngayNghiBuT7 } : null;
 }
 function xmTypeName(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều' })[k] || 'Đơn đi muộn, về sớm, công tác'; }
 async function requestNotice(db, cfg, origin, demo, recipients, title, content, so, req, now) {
@@ -553,27 +559,34 @@ async function ccCalcQueue(db, cfg, months) {
 }
 async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
   const ym = iso.slice(0, 7), dd = iso.slice(8, 10), row = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first();
-  if (!row) return false;
-  let data = {}; try { data = JSON.parse(row.du_lieu || '{}'); } catch (e) { return false; }
+  const weekendReqs = (await db.prepare("SELECT loai, ly_do FROM don WHERE ma = ? AND loai = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ?").bind(ma, WEEKEND_DUTY_TYPE, iso, iso).all()).results;
+  const weekend = weekendReqs.map(weekendDutyDates).filter(Boolean)[0] || null;
+  if (!row && !weekend) return false;
+  let data = {}; try { data = row ? JSON.parse(row.du_lieu || '{}') : {}; } catch (e) { return false; }
+  if (!row) Object.assign(data, { ngay: {}, ct: {}, cong: 0, phep: 0, le: 0, huong: 0, tc: 0, tam: true, partial: 1 });
+  const oldDay = data.ct && Array.isArray(data.ct[dd]) ? data.ct[dd] : [], oldCode = String(data.ngay && data.ngay[dd] || '').toUpperCase(), storedHoliday = oldDay[12] === 'hol' || oldCode === 'L';
+  if (weekend && (weekend.ngayTrucCN === iso || weekend.ngayNghiBuT7 === iso) && storedHoliday) return false;
+  const sundayDuty = !!(weekend && weekend.ngayTrucCN === iso), compSaturday = !!(weekend && weekend.ngayNghiBuT7 === iso);
   // The management client stores this map with new monthly rows so server-side approval refreshes never replace a hand-edited cell.
-  if (!data.suaTay || data.suaTay[dd]) return false;
+  if ((!data.suaTay && !weekend) || (data.suaTay && data.suaTay[dd])) return false;
+  if (!data.suaTay) data.suaTay = {};
   const start = Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) - VN, punches = (await punchesBetween(db, start, start + 864e5)).filter(x => x.ma === ma && !x.huy).sort((a, b) => a.t - b.t);
   const first = punches.find(x => x.loai === 'vao'), last = punches.slice().reverse().find(x => x.loai === 'ra'), tin = first ? vnHM(first.t) : '', tout = last ? vnHM(last.t) : '', both = !!(tin && tout);
-  const HS = await hsOf(db, ma, demo), ca = await caNgay(db, cfg, HS, ma, iso), base = ca || { vao: '08:30', ra: '17:30', som: 0 };
+  const HS = await hsOf(db, ma, demo), ca = await caNgay(db, cfg, HS, ma, iso), base = sundayDuty ? { vao: '09:00', ra: '17:00', som: 0 } : ca || { vao: '08:30', ra: '17:30', som: 0 };
   let ti = hm2min(tin), to = hm2min(tout), plannedIn = hm2min(base.vao), plannedOut = hm2min(base.ra), overnight = plannedIn !== null && plannedOut !== null && plannedOut <= plannedIn, shiftIn = plannedIn - (+base.som || 0), shiftOut = plannedOut;
   if (overnight) shiftOut += 1440;
   if (ti !== null && overnight && ti < plannedIn - 360) ti += 1440; if (to !== null && ti !== null && to < ti) to += 1440;
   const reqs = (await db.prepare("SELECT kieu, phut FROM xin_muon WHERE ma = ? AND ngay = ? AND trang_thai = 'Đã duyệt'").bind(ma, iso).all()).results;
-  const leaves = (await db.prepare("SELECT loai, tu, den, ly_do FROM don WHERE ma = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ?").bind(ma, iso, iso).all()).results;
+  const leaves = (await db.prepare("SELECT loai, tu, den, ly_do FROM don WHERE ma = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ?").bind(ma, iso, iso).all()).results.filter(x => x.loai !== WEEKEND_DUTY_TYPE);
   const fullTrip = leaves.some(x => /đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));
   const halfTrips = reqs.filter(x => x.kieu === 'cong_sang' || x.kieu === 'cong_chieu').length;
   const halfLeave = leaves.find(x => /nửa ngày/i.test(x.loai || ''));
   const fullLeave = leaves.find(x => !/đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));
   let late = both && shiftIn !== null ? Math.max(0, ti - shiftIn) : 0, early = both && shiftOut !== null ? Math.max(0, shiftOut - to) : 0, approved = 0;
   if (both) for (const x of reqs) if (x.kieu === 'muon' || x.kieu === 'som') { const actual = x.kieu === 'muon' ? late : early; approved += Math.min(actual, x.phut == null ? actual : Math.max(0, +x.phut || 0)); }
-  let raw = both ? Math.max(0, to - ti - Math.max(0, Math.min(to, 780) - Math.max(ti, 720))) : 0, minutes = Math.max(0, raw + approved); minutes = minutes >= 475 ? 480 : minutes;
+  let raw = both ? (sundayDuty ? Math.max(0, to - ti) : Math.max(0, to - ti - Math.max(0, Math.min(to, 780) - Math.max(ti, 720)))) : 0, minutes = Math.max(0, raw + approved); minutes = sundayDuty ? Math.min(480, minutes >= 475 ? 480 : minutes) : minutes >= 475 ? 480 : minutes;
   let ng = data.ngay || (data.ngay = {}), ct = data.ct || (data.ct = {}), old = Array.isArray(ct[dd]) ? ct[dd].slice() : [], cell = old.slice(); while (cell.length < 16) cell.push(null);
-  const oldType = cell[12] || '', oldWork = oldType === 'work' ? (+cell[8] || 0) : 0, oldPaid = oldType === 'paid' ? (+cell[9] || 0) : 0, oldHol = oldType === 'hol' ? (+cell[9] || 0) : 0, oldBh = oldType === 'bh' ? (+cell[10] || 0) : 0, oldUnpaid = oldType === 'unpaid' ? (+cell[11] || 0) : 0, oldHours = +cell[4] || 0;
+  const oldType = cell[12] || '', oldWork = oldType === 'work' ? (+cell[8] || 0) : 0, oldPaid = oldType === 'paid' ? (+cell[9] || 0) : 0, oldHol = oldType === 'hol' ? (+cell[9] || 0) : 0, oldBh = oldType === 'bh' ? (+cell[10] || 0) : 0, oldUnpaid = oldType === 'unpaid' ? (+cell[11] || 0) : 0, oldHours = +cell[4] || 0, oldOt = cell[6] == null ? (+cell[5] || 0) : (+cell[6] || 0), oldOtRaw = +cell[5] || 0, oldOtWait = !!cell[7];
   let code = '', type = 'work', worked = 0, ratio = 0, paid = 0, bh = 0, unpaid = 0;
   if (fullTrip || halfTrips) {
     const full = fullTrip || halfTrips >= 2 || both; worked = full ? 480 : 240; code = full ? 'CT' : 'X/2'; ratio = worked / 480;
@@ -583,16 +596,26 @@ async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
   } else if (halfLeave) {
     const buoi = requestText(halfLeave.ly_do).buoi === 'chieu' ? 'chieu' : 'sang', from = hm2min(base.vao) == null ? 480 : hm2min(base.vao), toShift = hm2min(base.ra) == null ? 1020 : hm2min(base.ra) + (hm2min(base.ra) <= from ? 1440 : 0), a = buoi === 'sang' ? Math.max(from, 780) : from, b = buoi === 'sang' ? toShift : Math.min(toShift, 720), workFrom = ti == null ? 0 : Math.max(ti, a), workTo = to == null ? 0 : Math.min(to, b);
     worked = both ? Math.min(240, Math.max(0, workTo - workFrom - Math.max(0, Math.min(workTo, 780) - Math.max(workFrom, 720)))) : 0; code = 'X/2'; ratio = worked / 480; type = 'work'; paid = 0.5;
+  } else if (compSaturday && !punches.length && !fullLeave && !halfLeave && !oldHol && String(ng[dd] || '').toUpperCase() !== 'L') {
+    code = ''; type = 'off';
+  } else if (sundayDuty && oldType !== 'hol' && String(ng[dd] || '').toUpperCase() !== 'L') {
+    type = 'work'; if (both) { worked = minutes; ratio = worked / 480; code = worked >= 475 ? 'X' : worked ? 'X/2' : '?'; } else code = '?';
   } else if (both) {
     worked = minutes; ratio = worked / 480; code = ng[dd] || 'X';
   } else return false;
   cell[0] = tin; cell[1] = tout; cell[2] = late > 5 ? late : 0; cell[3] = early > 5 ? early : 0; cell[4] = worked ? Number((worked / 60).toFixed(2)) : 0;
+  if (sundayDuty && type === 'work' && oldType !== 'hol' && String(ng[dd] || '').toUpperCase() !== 'L') { cell[5] = 0; cell[6] = 0; cell[7] = 0; }
   cell[8] = Number(ratio.toFixed(3)); cell[9] = paid; cell[10] = bh; cell[11] = unpaid; cell[12] = type; cell[13] = ''; cell[14] = reqs.some(x => x.kieu === 'muon') ? 1 : 0; cell[15] = reqs.some(x => x.kieu === 'som') ? 1 : 0;
   ng[dd] = code; ct[dd] = cell;
-  const newWork = type === 'work' ? ratio : 0, newPaid = type === 'paid' ? paid : 0, newHol = type === 'hol' ? paid : 0, newBh = type === 'bh' ? bh : 0, newUnpaid = type === 'unpaid' ? unpaid : 0, dh = cell[4] - oldHours, dw = newWork - oldWork, dp = newPaid - oldPaid, dhol = newHol - oldHol, dbh = newBh - oldBh, dup = newUnpaid - oldUnpaid, dsal = dw + dp + dhol;
-  const r3 = n => Number((+n || 0).toFixed(3)); data.cong = r3((+data.cong || 0) + dw); data.phep = r3((+data.phep || 0) + dp); data.le = r3((+data.le || 0) + dhol); data.huong = r3((+data.huong || 0) + dsal);
-  if (data.summary && typeof data.summary === 'object') { const s = data.summary; s.work = r3((+s.work || 0) + dw); s.paid = r3((+s.paid || 0) + dp); s.hol = r3((+s.hol || 0) + dhol); s.bh = r3((+s.bh || 0) + dbh); s.unpaid = r3((+s.unpaid || 0) + dup); s.salary = r3((+s.salary || 0) + dsal); s.attHours = Number(((+s.attHours || 0) + dh).toFixed(2)); }
-  await db.prepare('UPDATE cong SET du_lieu = ?, xn = 0, xn_at = NULL, phan_hoi = NULL WHERE ym = ? AND ma = ?').bind(JSON.stringify(data), ym, ma).run();
+  const newWork = type === 'work' ? ratio : 0, newPaid = type === 'paid' ? paid : 0, newHol = type === 'hol' ? paid : 0, newBh = type === 'bh' ? bh : 0, newUnpaid = type === 'unpaid' ? unpaid : 0, dh = cell[4] - oldHours, dw = newWork - oldWork, dp = newPaid - oldPaid, dhol = newHol - oldHol, dbh = newBh - oldBh, dup = newUnpaid - oldUnpaid;
+  const r3 = n => Number((+n || 0).toFixed(3)), daysInMonth = new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate(); let sundays = 0;
+  for (let day = 1; day <= daysInMonth; day++) if (new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7) - 1, day)).getUTCDay() === 0) sundays++;
+  const paidCap = Math.max(0, daysInMonth - sundays), holidayCount = Math.max(0, +data.le || (data.summary && +data.summary.hol) || 0), calendarWorkCap = Math.max(0, paidCap - holidayCount), summaryCap = data.summary && data.summary.stdDays != null && Number.isFinite(+data.summary.stdDays) ? Math.max(0, +data.summary.stdDays) : calendarWorkCap, workCap = Math.min(calendarWorkCap, summaryCap);
+  const currentWork = +data.cong || 0, nextWork = Math.min(workCap, Math.max(0, currentWork + dw)), appliedWork = nextWork - currentWork;
+  data.cong = r3(nextWork); data.phep = r3((+data.phep || 0) + dp); data.le = r3((+data.le || 0) + dhol); data.huong = r3(Math.min(paidCap, (+data.huong || 0) + appliedWork + dp + dhol));
+  if (sundayDuty && type === 'work' && oldType !== 'hol' && String(ng[dd] || '').toUpperCase() !== 'L') data.tc = r3(Math.max(0, (+data.tc || 0) - oldOt));
+  if (data.summary && typeof data.summary === 'object') { const s = data.summary, currentSummaryWork = +s.work || 0, nextSummaryWork = Math.min(workCap, Math.max(0, currentSummaryWork + dw)), appliedSummaryWork = nextSummaryWork - currentSummaryWork; s.work = r3(nextSummaryWork); s.paid = r3((+s.paid || 0) + dp); s.hol = r3((+s.hol || 0) + dhol); s.bh = r3((+s.bh || 0) + dbh); s.unpaid = r3((+s.unpaid || 0) + dup); s.salary = r3(Math.min(paidCap, (+s.salary || 0) + appliedSummaryWork + dp + dhol)); s.attHours = Number(((+s.attHours || 0) + dh).toFixed(2)); if (sundayDuty && type === 'work' && oldType !== 'hol' && String(ng[dd] || '').toUpperCase() !== 'L') { s.otR = r3(Math.max(0, (+s.otR || 0) - oldOt)); s.otPay = r3(Math.max(0, (+s.otPay || 0) - oldOt * 2)); s.otWait = r3(Math.max(0, (+s.otWait || 0) - (oldOtWait ? oldOtRaw : 0))); s.otNo = r3(Math.max(0, (+s.otNo || 0) - (!oldOt && !oldOtWait ? oldOtRaw : 0))); s.fileOt = r3(Math.max(0, (+s.fileOt || 0) - oldOtRaw)); } }
+  await db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, NULL, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, JSON.stringify(data), 'Tự động cập nhật đơn đã duyệt').run();
   return true;
 }
 async function ccCalcClearMonth(db, cfg, ym) {
@@ -1136,17 +1159,18 @@ async function api(req, env, url) {
       return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
+      const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [], recalcWeekend = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
       const notices = [];
       for (const x of list) {
         const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o || !demoFind(o.ma)) continue;
         if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
-          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
-          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh;
+          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
+          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
           if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
+          if (loai === WEEKEND_DUTY_TYPE && (!weekendDutyDates({ ly_do: requestTextPack('', '', [], dates) }) || tu !== dates.ngayNghiBuT7 || den !== dates.ngayTrucCN)) continue;
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
-          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh); if (packed == null) continue;
+          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh, dates); if (packed == null) continue;
           const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
           mark(o.tu, o.den); mark(tu, den);
           st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
@@ -1154,9 +1178,11 @@ async function api(req, env, url) {
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
         mark(o.tu, o.den);
         st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay) || null, now, so));
+        if (x.trang_thai === 'Đã duyệt' && o.trang_thai !== 'Đã duyệt' && o.loai === WEEKEND_DUTY_TYPE) recalcWeekend.push({ ma: o.ma, d: o });
         if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') notices.push({ ma: o.ma, so, t: 'Đơn ' + o.loai + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: o.tu.slice(8) + '/' + o.tu.slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      for (const x of recalcWeekend) { const pair = weekendDutyDates(x.d); if (pair) for (const day of [pair.ngayNghiBuT7, pair.ngayTrucCN]) await ccPersistApprovedDay(db, cfg, x.ma, day, true).catch(e => console.error('ccPersistApprovedDay', e)); }
       await ccCalcQueue(db, cfg, months);
       if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, true, [n.ma], n.t, n.b, n.so, req, now))));
       return jc({ ok: true, n: st.length });
@@ -1344,7 +1370,7 @@ async function api(req, env, url) {
     }
     if (r === 'don') {
       const tu = String(url.searchParams.get('tu') || '2000-01-01');
-      return jc({ ok: true, list: (await db.prepare('SELECT * FROM don WHERE den >= ? ORDER BY tao').bind(tu).all()).results });
+      return jc({ ok: true, list: (await db.prepare('SELECT * FROM don WHERE den >= ? ORDER BY tao').bind(tu).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
     }
     { const vt = await vbTbApi(r, db, cfg, body, url, req, now, false, jc, c => !!c); if (vt) return vt; } // 16/11: kho thông tin chung + thông báo
     { const vt = await bcApi(r, db, cfg, body, url, req, now, false, jc, c => !!c); if (vt) return vt; } // 16/11 13:29: gửi báo cáo định kỳ
@@ -1372,16 +1398,17 @@ async function api(req, env, url) {
       return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
-      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
+      const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [], recalcWeekend = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
       for (const x of list) {
         const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o) continue;
         if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
-          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
-          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh;
+          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
+          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
           if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
+          if (loai === WEEKEND_DUTY_TYPE && (!weekendDutyDates({ ly_do: requestTextPack('', '', [], dates) }) || tu !== dates.ngayNghiBuT7 || den !== dates.ngayTrucCN)) continue;
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
-          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh); if (packed == null) continue;
+          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh, dates); if (packed == null) continue;
           const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
           mark(o.tu, o.den); mark(tu, den);
           st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
@@ -1389,9 +1416,11 @@ async function api(req, env, url) {
         if (!['Đã duyệt', 'Từ chối', 'Chờ duyệt'].includes(x.trang_thai)) continue;
         mark(o.tu, o.den);
         st.push(db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, so_ngay = COALESCE(?, so_ngay), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(x.trang_thai, String(x.nguoi_duyet || '').slice(0, 80), String(x.ngay_duyet || ''), String(x.ly_do_tc || '').slice(0, 300), x.so_ngay == null ? null : Number(x.so_ngay), now, so));
+        if (x.trang_thai === 'Đã duyệt' && o.trang_thai !== 'Đã duyệt' && o.loai === WEEKEND_DUTY_TYPE) recalcWeekend.push({ ma: o.ma, d: o });
         if (o.trang_thai === 'Chờ duyệt' && x.trang_thai !== 'Chờ duyệt') notices.push({ ma: o.ma, so, t: 'Đơn ' + o.loai + ' ' + (x.trang_thai === 'Đã duyệt' ? 'đã được duyệt' : 'bị từ chối'), b: String(o.tu || '').slice(8) + '/' + String(o.tu || '').slice(5, 7) + ' · ' + String(x.nguoi_duyet || '') + (x.ly_do_tc ? ': ' + x.ly_do_tc : '') });
       }
       if (st.length) await db.batch(st);
+      for (const x of recalcWeekend) { const pair = weekendDutyDates(x.d); if (pair) for (const day of [pair.ngayNghiBuT7, pair.ngayTrucCN]) await ccPersistApprovedDay(db, cfg, x.ma, day, false).catch(e => console.error('ccPersistApprovedDay', e)); }
       await ccCalcQueue(db, cfg, months);
       if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, false, [n.ma], n.t, n.b, n.so, req, now))));
       return jc({ ok: true, n: st.length });
@@ -1864,9 +1893,15 @@ async function api(req, env, url) {
   if (p === '/api/don' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
     if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
-    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày'];
-    const loai = LOAI.includes(body.loai) ? body.loai : null, tu = String(body.tu || ''), den = String(body.den || body.tu || ''), ly = String(body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi || ''), anh = requestPhotos(body.anh);
+    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', WEEKEND_DUTY_TYPE];
+    const loai = LOAI.includes(body.loai) ? body.loai : null, ly = String(body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi || ''), anh = requestPhotos(body.anh);
+    let tu = String(body.tu || ''), den = String(body.den || body.tu || ''), weekendDates = null;
     if (!loai) return bad('Chọn loại nghỉ.');
+    if (loai === WEEKEND_DUTY_TYPE) {
+      const ngayTrucCN = String(body.ngayTrucCN || ''), ngayNghiBuT7 = String(body.ngayNghiBuT7 || ''), valid = x => ISO_RE.test(x) && !isNaN(Date.parse(x + 'T00:00:00Z')) && new Date(x + 'T00:00:00Z').toISOString().slice(0, 10) === x;
+      if (!valid(ngayTrucCN) || !valid(ngayNghiBuT7) || isoDowW(ngayTrucCN) !== 0 || isoDowW(ngayNghiBuT7) !== 6 || addDaysIso(ngayNghiBuT7, 1) !== ngayTrucCN) return bad('Chọn ngày trực Chủ nhật và ngày nghỉ bù Thứ 7 liền trước trong cùng tuần.');
+      tu = ngayNghiBuT7; den = ngayTrucCN; weekendDates = { ngayTrucCN, ngayNghiBuT7 };
+    }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu) return bad('Chọn ngày nghỉ (đến ngày không trước từ ngày).');
     if (loai === 'Nghỉ phép nửa ngày' && (tu !== den || !['sang', 'chieu'].includes(buoi))) return bad('Chọn một ngày nghỉ và buổi sáng hoặc buổi chiều.');
     if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
@@ -1881,8 +1916,8 @@ async function api(req, env, url) {
         if (DH.k === 'bu' && now > st0 + m * 60e3) return bad('Công ty cho gửi bù đơn ' + loai.toLowerCase() + ' muộn nhất ' + tt + ' sau khi bắt đầu nghỉ. Đơn này đã quá hạn – báo quản lý trực tiếp để kế toán nhập đơn.'); } }
     let bg = ''; const bgm = String(body.ban_giao || '').trim().toUpperCase(); if (bgm) { if (bgm === s.nv.ma) return bad('Người nhận bàn giao phải là người khác.'); const x = await db.prepare('SELECT ma, ten FROM nv WHERE ma = ? AND active = 1').bind(bgm).first(); if (!x) return bad('Không tìm thấy người nhận bàn giao.'); bg = x.ma + '|' + x.ten; }
     const BYd = await hsLite(db, demo), NDD = nguoiDuyet(BYd, s.nv.ma); // 13/11: ghi tên những người được duyệt lúc đơn còn chờ; duyệt xong ghi đè bằng tên người đã duyệt
-    const packed = requestTextPack(ly, buoi, anh); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
-    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, so_ngay, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, 'Điện thoại', ?)").bind(so, s.nv.ma, loai, tu, den, loai === 'Nghỉ phép nửa ngày' ? 0.5 : null, packed, now, NDD.length ? NDD.map(x => BYd[x].ten).join(', ') : (HS && HS.ql_ten) || '', NDD[0] || (HS && HS.ql) || null, bg, now).run();
+    const packed = requestTextPack(ly, buoi, anh, weekendDates); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
+    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, so_ngay, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, 'Điện thoại', ?)").bind(so, s.nv.ma, loai, tu, den, loai === 'Nghỉ phép nửa ngày' ? 0.5 : loai === WEEKEND_DUTY_TYPE ? 0 : null, packed, now, NDD.length ? NDD.map(x => BYd[x].ten).join(', ') : (HS && HS.ql_ten) || '', NDD[0] || (HS && HS.ql) || null, bg, now).run();
     later(req, requestNotice(db, cfg, url.origin, demo, NDD.length ? NDD : [HS && HS.ql], s.nv.ten + ' gửi đơn ' + loai.toLowerCase(), tu.slice(8) + '/' + tu.slice(5, 7) + (den !== tu ? ' – ' + den.slice(8) + '/' + den.slice(5, 7) : '') + (loai === 'Nghỉ phép nửa ngày' ? ' · buổi ' + (buoi === 'sang' ? 'sáng' : 'chiều') : '') + (ly ? ' · ' + ly : ''), so, req, now));
     return json({ ok: true, so });
   }
@@ -1944,16 +1979,17 @@ async function api(req, env, url) {
       later(req, requestNotice(db, cfg, url.origin, demo, [x0.ma], 'Đơn ' + xmTypeName(x0.kieu) + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), x0.ngay.slice(8) + '/' + x0.ngay.slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
       return json({ ok: true, nguoi: s.nv.ten });
     }
-    const d0 = await db.prepare('SELECT so, ma, duyet_ma, trang_thai, nguoi_duyet, loai, tu FROM don WHERE so = ?').bind(so).first();
+    const d0 = await db.prepare('SELECT so, ma, duyet_ma, trang_thai, nguoi_duyet, loai, tu, den, ly_do FROM don WHERE so = ?').bind(so).first();
     if (!d0) return bad('Không tìm thấy đơn này.');
     if (d0.trang_thai !== 'Chờ duyệt') return bad('Đơn này đã được ' + (d0.nguoi_duyet || 'người khác') + ' xử lý: ' + String(d0.trang_thai).toLowerCase() + '.');
     if (!duocDuyet(await hsLite(db, demo), s.nv.ma, d0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
     // nhiều người cùng có quyền: ai bấm trước thì đơn chuyển trạng thái và ghi tên người đó; người bấm sau nhận thông báo đã xử lý
     const r = await db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
     if (r.meta.changes && ok) {
-      const den = d0.den || d0.tu; let guard = 0;
-      for (let d = d0.tu; d <= den && guard++ < 400; d = addDaysIso(d, 1)) await ccPersistApprovedDay(db, cfg, d0.ma, d, demo).catch(e => console.error('ccPersistApprovedDay', e));
-      await ccCalcQueue(db, cfg, new Set(ccReqMonths(d0.tu, den)));
+      const pair = d0.loai === WEEKEND_DUTY_TYPE ? weekendDutyDates(d0) : null, from = pair ? pair.ngayNghiBuT7 : d0.tu, den = pair ? pair.ngayTrucCN : d0.den || d0.tu;
+      if (pair) for (const d of [pair.ngayNghiBuT7, pair.ngayTrucCN]) await ccPersistApprovedDay(db, cfg, d0.ma, d, demo).catch(e => console.error('ccPersistApprovedDay', e));
+      else { let guard = 0; for (let d = from; d <= den && guard++ < 400; d = addDaysIso(d, 1)) await ccPersistApprovedDay(db, cfg, d0.ma, d, demo).catch(e => console.error('ccPersistApprovedDay', e)); }
+      await ccCalcQueue(db, cfg, new Set(ccReqMonths(from, den)));
     }
     if (r.meta.changes) later(req, requestNotice(db, cfg, url.origin, demo, [d0.ma], 'Đơn ' + String(d0.loai || 'nghỉ').toLowerCase() + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), String(d0.tu || '').slice(8) + '/' + String(d0.tu || '').slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
     return r.meta.changes ? json({ ok: true, nguoi: s.nv.ten }) : bad('Đơn này vừa được người khác xử lý.');
@@ -1965,9 +2001,12 @@ async function api(req, env, url) {
     if (!tv.length) return json({ ok: true, ds: [], don_cho: [], don_xong: [], cong: null });
     const ph = tv.map(() => '?').join(','), today = isoVN(now), d0 = vnDayStart(now), pun = {}, nghi = {}, av = {};
     (await db.prepare(`SELECT ma, t, loai FROM cham WHERE (huy IS NULL OR huy = 0) AND t >= ? AND t < ? AND ma IN (${ph}) ORDER BY t`).bind(d0, d0 + 864e5, ...tv).all()).results.forEach(r => { const x = pun[r.ma] = pun[r.ma] || {}; if (r.loai === 'vao' && !x.vao) x.vao = vnHM(r.t); if (r.loai === 'ra') x.ra = vnHM(r.t); });
-    (await db.prepare(`SELECT ma, loai FROM don WHERE trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ? AND ma IN (${ph})`).bind(today, today, ...tv).all()).results.forEach(r => { nghi[r.ma] = r.loai; });
+    (await db.prepare(`SELECT ma, loai FROM don WHERE trang_thai = 'Đã duyệt' AND (loai IS NULL OR loai != ?) AND tu <= ? AND den >= ? AND ma IN (${ph})`).bind(WEEKEND_DUTY_TYPE, today, today, ...tv).all()).results.forEach(r => { nghi[r.ma] = r.loai; });
     if (demo) tv.forEach(ma => { const e = demoFind(ma); if (e && !pun[ma] && !nghi[ma]) { const sy = demoSynDay(e, today), hm = v => String(Math.floor(v / 60)).padStart(2, '0') + ':' + String(v % 60).padStart(2, '0'); if (sy && now >= dayT(today, sy.vao)) pun[ma] = { vao: hm(sy.vao), ra: now >= dayT(today, sy.ra) ? hm(sy.ra) : '' }; } }); // bản thử: giờ vào/ra mẫu của hôm nay theo đúng công thức dữ liệu mẫu
-    if (demo) tv.forEach(ma => { const e = demoFind(ma); if (e && !nghi[ma]) { const d = (e.don || []).find(x => x.trang_thai === 'Đã duyệt' && x.tu <= today && today <= x.den); if (d) nghi[ma] = d.loai; } });
+    if (demo) tv.forEach(ma => { const e = demoFind(ma); if (e && !nghi[ma]) { const d = (e.don || []).find(x => x.trang_thai === 'Đã duyệt' && x.loai !== WEEKEND_DUTY_TYPE && x.tu <= today && today <= x.den); if (d) nghi[ma] = d.loai; } });
+    const approvedTrips = new Set((await db.prepare(`SELECT ma FROM xin_muon WHERE ngay = ? AND trang_thai = 'Đã duyệt' AND kieu IN ('cong_sang','cong_chieu','di_cong_tac','cong_tac','cong') AND ma IN (${ph})`).bind(today, ...tv).all()).results.map(x => x.ma));
+    const weekendRows = (await db.prepare(`SELECT ma, ly_do FROM don WHERE loai = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ? AND ma IN (${ph})`).bind(WEEKEND_DUTY_TYPE, today, today, ...tv).all()).results;
+    weekendRows.forEach(x => { const pair = weekendDutyDates(x); if (pair && pair.ngayNghiBuT7 === today && !pun[x.ma] && !nghi[x.ma] && !approvedTrips.has(x.ma)) nghi[x.ma] = 'Nghỉ bù Thứ 7'; });
     (await db.prepare(`SELECT ma, at FROM anh WHERE ma IN (${ph})`).bind(...tv).all()).results.forEach(x => { av[x.ma] = x.at; });
     const cho = await donChoDuyet(db, BY, me), choMa = {}; cho.forEach(d => { choMa[d.ma] = 1; });
     const xong = (await db.prepare(`SELECT d.so, d.ma, n.ten, d.loai, d.tu, d.den, d.so_ngay, d.ly_do, d.ban_giao, d.trang_thai, d.nguoi_duyet, d.ngay_duyet, d.ly_do_tc FROM don d LEFT JOIN nv n ON n.ma = d.ma WHERE d.trang_thai IN ('Đã duyệt','Từ chối') AND d.ngay_duyet >= ? AND d.ma IN (${ph}) ORDER BY d.cap_nhat DESC LIMIT 15`).bind(isoVN(now - 30 * 864e5), ...tv).all()).results.map(x => ({ ...x, ...requestText(x.ly_do) }));
