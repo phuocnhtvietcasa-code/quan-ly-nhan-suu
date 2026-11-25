@@ -10598,6 +10598,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   var BC_ISSUE = { 'don-cho': 'Có đơn nghỉ chờ duyệt', vang: 'Vắng chưa rõ lý do', 'thieu-cham': 'Thiếu lượt chấm', 'thieu-don': 'Thiếu đơn nghỉ', 'ky-hieu-la': 'Ký hiệu chưa khai báo', 'khong-du': 'Không đủ giờ tính công' };
   var BC_DAYK = { work: 'Ngày làm việc', half: 'Làm buổi sáng', rest: 'Nghỉ hằng tuần', hol: 'Nghỉ lễ, tết' };
   var BC_DEVICE_ACTIVE = {};
+  var BC_SAVED = {};
   function bcX(u) { var x = u.ccx || (u.ccx = {}); x.m = x.m || {}; x.ok = x.ok || {}; x.lock = x.lock || {}; x.log = x.log || []; x.v = x.v || 0; return x; }
   function bcCode(s, k) { k = String(k || '').toUpperCase(); var hit = s.codes.filter(function (c) { return String(c.k).toUpperCase() === k; })[0]; if (hit) return hit; var legacy = k === 'P' ? 'PN' : k === 'PN' ? 'P' : ''; return legacy ? s.codes.filter(function (c) { return String(c.k).toUpperCase() === legacy; })[0] : null; }
   function bcDays(ym) { var y = +ym.slice(0, 4), m = +ym.slice(5, 7), n = new Date(Date.UTC(y, m, 0)).getUTCDate(), a = []; for (var d = 1; d <= n; d++) a.push(ccIso(y, m, d)); return a; }
@@ -10820,6 +10821,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       });
       S0.work = bcTrunc(S0.attHours / 8, 3); S0.salary = bcTrunc(S0.work + S0.paid + S0.hol, 3);
       if (p.exc.sch) bcSxMonth(p, S0, R, days.length);
+      if (modeKey === 'all') wfApplySavedCong(u, ym, p, s);
     });
     var res = { key: key, ym: ym, u: u, s: s, days: days, ppl: ppl, dataEnd: dataEnd, hasFile: rows.length > 0, lock: lock };
     u._bc[ym] = res; return res;
@@ -10930,7 +10932,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     // 17/11 đợt 2 (anh góp ý ảnh 6): gom bộ lọc thành 1 thanh gọn, báo cáo thành hàng tab, số liệu thành dải nhỏ – bảng công lên gần đầu trang
     var useg = uAll.length > 1 ? '<div class="seg">' + uAll.map(function (x) { return '<button class="' + (x.id === u0.id ? 'on' : '') + '" data-act="bc-u" data-id="' + x.id + '">' + esc(shortUnit(x.name)) + '</button>'; }).join('') + '</div>' : '';
     var kseg = '<div class="seg bc-kseg" role="tablist" title="Khối văn phòng: giờ hành chính · Khối sản xuất, vận hành: theo ca làm · Tất cả: 2 bảng tách riêng">' + [['vp', 'Văn phòng', NK.vp], ['sx', 'Sản xuất, vận hành', NK.sx], ['all', 'Tất cả', NK.vp + NK.sx]].map(function (k) { return '<button role="tab" aria-selected="' + (f.k === k[0]) + '" class="' + (f.k === k[0] ? 'on' : '') + '" data-act="bc-k" data-id="' + k[0] + '">' + k[1] + ' <small>' + k[2] + '</small></button>'; }).join('') + '</div>';
-    bcAutoLoad(u0); var calcReady = wfOn(u0) || wfDemoOn(u0), calcAuto = !!(u0.wf && u0.wf.ccAuto), calcDeviceAuto = !!(u0.wf && u0.wf.ccDeviceAuto), calcWait = !!(u0.wf && u0.wf.ccAutoLoading), calcMenu = '<div class="bc-trow"><details style="position:relative"><summary class="btn btn-sm btn-primary" style="list-style:none;cursor:pointer">Tính công ▾</summary><div style="position:absolute;left:0;right:auto;top:100%;z-index:20;width:min(380px,calc(100vw - 24px));min-width:min(380px,calc(100vw - 24px));max-width:calc(100vw - 24px);box-sizing:border-box;padding:6px;background:var(--card,#fff);border:1px solid var(--line,#ddd);border-radius:8px;box-shadow:0 6px 18px #0002"><button type="button" class="btn btn-sm" style="display:block;width:100%;text-align:left" data-act="bc-calc-device"' + (calcReady ? '' : ' disabled title="Kết nối máy chủ chấm công để lưu vào D1"') + '>Tính công ngay (Từ tool đồng bộ máy chấm công)</button><button type="button" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-now"' + (calcReady ? '' : ' disabled title="Kết nối máy chủ chấm công để lưu vào D1"') + '>Tính công ngay (Từ file nhập lên phần mềm)</button><button type="button" role="checkbox" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-device-auto" aria-checked="' + calcDeviceAuto + '" aria-pressed="' + calcDeviceAuto + '"' + (!calcReady || calcWait ? ' disabled' : '') + '>' + (calcDeviceAuto ? '☑ ' : '☐ ') + 'Tự động tính công (Từ tool đồng bộ máy chấm công) <span class="faint">00:00 &amp; 12:00</span>' + (calcWait ? ' · đang đọc' : '') + '</button><button type="button" role="checkbox" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-auto" aria-checked="' + calcAuto + '" aria-pressed="' + calcAuto + '"' + (!calcReady || calcWait ? ' disabled' : '') + '>' + (calcAuto ? '☑ ' : '☐ ') + 'Tự động tính công (Từ file nhập lên phần mềm) <span class="faint">00:00 &amp; 12:00</span>' + (calcWait ? ' · đang đọc' : '') + '</button></div></details></div>';
+    bcAutoLoad(u0); bcSavedLoad(u0, f.m); var calcReady = wfOn(u0) || wfDemoOn(u0), calcAuto = !!(u0.wf && u0.wf.ccAuto), calcDeviceAuto = !!(u0.wf && u0.wf.ccDeviceAuto), calcWait = !!(u0.wf && u0.wf.ccAutoLoading), calcMenu = '<div class="bc-trow"><details style="position:relative"><summary class="btn btn-sm btn-primary" style="list-style:none;cursor:pointer">Tính công ▾</summary><div style="position:absolute;left:0;right:auto;top:100%;z-index:20;width:min(380px,calc(100vw - 24px));min-width:min(380px,calc(100vw - 24px));max-width:calc(100vw - 24px);box-sizing:border-box;padding:6px;background:var(--card,#fff);border:1px solid var(--line,#ddd);border-radius:8px;box-shadow:0 6px 18px #0002"><button type="button" class="btn btn-sm" style="display:block;width:100%;text-align:left" data-act="bc-calc-device"' + (calcReady ? '' : ' disabled title="Kết nối máy chủ chấm công để lưu vào D1"') + '>Tính công ngay (Từ tool đồng bộ máy chấm công)</button><button type="button" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-now"' + (calcReady ? '' : ' disabled title="Kết nối máy chủ chấm công để lưu vào D1"') + '>Tính công ngay (Từ file nhập lên phần mềm)</button><button type="button" role="checkbox" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-device-auto" aria-checked="' + calcDeviceAuto + '" aria-pressed="' + calcDeviceAuto + '"' + (!calcReady || calcWait ? ' disabled' : '') + '>' + (calcDeviceAuto ? '☑ ' : '☐ ') + 'Tự động tính công (Từ tool đồng bộ máy chấm công) <span class="faint">00:00 &amp; 12:00</span>' + (calcWait ? ' · đang đọc' : '') + '</button><button type="button" role="checkbox" class="btn btn-sm" style="display:block;width:100%;margin-top:4px;text-align:left" data-act="bc-calc-auto" aria-checked="' + calcAuto + '" aria-pressed="' + calcAuto + '"' + (!calcReady || calcWait ? ' disabled' : '') + '>' + (calcAuto ? '☑ ' : '☐ ') + 'Tự động tính công (Từ file nhập lên phần mềm) <span class="faint">00:00 &amp; 12:00</span>' + (calcWait ? ' · đang đọc' : '') + '</button></div></details></div>';
     var tool = '<div class="bc-tool card">' + (useg ? '<div class="bc-trow">' + useg + '</div>' : '') + calcMenu +
       '<div class="bc-trow bc-tf">' + (khoiBoth() ? '<div class="field"><label>Khối</label>' + kseg + '</div>' : '') + selectBox('bM', 'Tháng', ms.slice().reverse().map(function (m) { return [m, 'Tháng ' + HR.ymLabel(m)]; }), f.m) +
       selectBox('bDept', 'Phòng ban', [['', 'Tất cả phòng ban']].concat(res[0].ppl.filter(function (p) { return bcInK(p, f.k); }).map(function (p) { return p.dept; }).filter(function (d, i, A) { return d && A.indexOf(d) === i; }).map(function (d) { return [d, d]; })), f.dept) + searchBox('bQ', f.q) + '</div></div>';
@@ -11665,15 +11667,63 @@ if (typeof module !== 'undefined') module.exports = XW;
         return (byD[key] = { tuan: t, nua: nua, ca: sh ? (function () { var o = { ten: sh.name, vao: sh.inT, ra: sh.outT }, ng = {}; CC_DOW.forEach(function (w) { var dt = sh.dayT && sh.dayT[w[0]]; if (dt && t.indexOf(w[0]) >= 0) ng[w[0]] = { vao: dt.inT, ra: dt.outT }; }); if (Object.keys(ng).length) o.ngay = ng; if (+sh.pre) { o.som = +sh.pre; o.som_ngay = (sh.preDays && sh.preDays.length ? sh.preDays.map(Number) : [0, 1, 2, 3, 4, 5, 6]).filter(function (d) { return t.indexOf(d) >= 0; }); } return o; })() : null, sx: ccIsSxDept(s, dept) ? 1 : 0 }); /* 12/11 17:56: nua = thứ làm nửa ngày (app tô nửa xám) */ } };
   }
   window.ccAppExtra = ccAppExtra;
-  function wfCongOf(p, tam) { var S0 = p.sum, ng = {}, ct = {}; Object.keys(p.days).forEach(function (dd) { var c = p.days[dd]; if (c.src !== 'out' && c.k) ng[dd] = c.k; if (c.src !== 'out' && (c.tin || c.tout || c.workHours != null)) ct[dd] = [c.tin || '', c.tout || '', c.late || 0, c.early || 0, c.workHours != null ? bcTrunc(c.workHours, 2) : c.hours != null ? bcTrunc(c.hours, 2) : null, c.otRaw || c.ot || 0]; }); var r3 = function (v) { return bcTrunc(v, 3); }; return { tam: !!tam, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct }; }
+  function bcSavedKey(u, ym) { return u.id + '|' + ym; }
+  function bcSavedSet(u, ym, list, replace) {
+    var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }); cache.rev = (cache.rev || 0) + 1; if (replace) cache.rows = {}; u._bc = {};
+    (list || []).forEach(function (x) { if (x && x.ma) cache.rows[String(x.ma).toUpperCase()] = { du_lieu: x.du_lieu || {} }; });
+    if (replace) cache.loaded = true; cache.loading = false; cache.failed = false; return cache;
+  }
+  function bcSavedLoad(u, ym) {
+    if (!u || (!wfOn(u) && !wfDemoOn(u))) return;
+    var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }); if (cache.loaded || cache.loading || cache.failed) return;
+    cache.loading = true; var rev = cache.rev || 0, call = wfOn(u) ? function () { return wfCall(u, 'cong?ym=' + ym); } : function () { return wfDemoGet('cong?ym=' + ym); };
+    call().then(function (j) {
+      if ((cache.rev || 0) !== rev) return;
+      bcSavedSet(u, ym, j.list || [], true);
+      if (curPage === 'cc' && bcUnit() === u && (PS.bc || {}).m === ym) render();
+    }, function () { if ((cache.rev || 0) === rev) { cache.loading = false; cache.failed = true; } });
+  }
+  function wfApplySavedCong(u, ym, p, s) {
+    var cache = BC_SAVED[bcSavedKey(u, ym)], row = cache && cache.rows && cache.rows[String(p.id).toUpperCase()]; if (!row) return;
+    var d = row.du_lieu || {}, ng = d.ngay || {}, ct = d.ct || {}, keys = Object.keys(ng);
+    Object.keys(ct).forEach(function (dd) { if (keys.indexOf(dd) < 0) keys.push(dd); });
+    keys.forEach(function (dd) {
+      if (!/^\d{2}$/.test(dd)) return; var c = p.days[dd], v = ct[dd]; if (!c || c.manual) return;
+      c.k = Object.prototype.hasOwnProperty.call(ng, dd) ? String(ng[dd] || '') : c.k;
+      c.cong = null; c.paid = c.bh = c.unpaid = 0; c.issue = c.k === '?' ? c.issue : '';
+      bcApplyCode(s, c); c.src = c.src === 'out' ? 'out' : d.source === 'device' ? 'tool' : 'saved';
+      if (Array.isArray(v)) {
+        c.tin = v[0] || ''; c.tout = v[1] || ''; c.late = +v[2] || 0; c.early = +v[3] || 0; c.workHours = v[4] == null ? null : +v[4]; c.hours = p.exc.hr ? c.workHours : null; c.otRaw = +v[5] || 0;
+        c.ot = v[6] == null ? c.otRaw : +v[6] || 0; c.otWait = !!v[7]; if (v.length > 8) c.cong = v[8] == null ? null : +v[8];
+        if (v.length > 9) c.paid = +v[9] || 0; if (v.length > 10) c.bh = +v[10] || 0; if (v.length > 11) c.unpaid = +v[11] || 0;
+        if (v.length > 12 && v[12]) c.type = v[12]; if (v.length > 13) c.issue = v[13] || '';
+        if (v.length > 14) c.lateOk = !!v[14]; if (v.length > 15) c.earlyOk = !!v[15];
+      } else { c.tin = c.tout = ''; c.late = c.early = c.otRaw = c.ot = 0; c.otWait = false; c.workHours = c.hours = c.wk = null; c.night = c.otNt = 0; }
+    });
+    if (d.summary && typeof d.summary === 'object') Object.assign(p.sum, d.summary);
+    else {
+      p.sum.work = +d.cong || 0; p.sum.paid = +d.phep || 0; p.sum.hol = +d.le || 0; p.sum.salary = +d.huong || 0; p.sum.otN = +d.tc || 0; p.sum.otR = p.sum.otH = 0;
+      p.sum.late = p.sum.lateMin = p.sum.early = p.sum.earlyMin = 0;
+      Object.keys(ct).forEach(function (dd) { var v = ct[dd]; if (!Array.isArray(v)) return; if (+v[2]) { p.sum.late++; p.sum.lateMin += +v[2]; } if (+v[3]) { p.sum.early++; p.sum.earlyMin += +v[3]; } });
+    }
+  }
+  function wfCongOf(p, tam, sourceMode) {
+    var S0 = p.sum, ng = {}, ct = {};
+    Object.keys(p.days).forEach(function (dd) {
+      var c = p.days[dd]; if (c.src === 'out') return; ng[dd] = c.k || '';
+      if (c.tin || c.tout || c.workHours != null || c.late || c.early || c.otRaw || c.ot || c.otWait) ct[dd] = [c.tin || '', c.tout || '', c.late || 0, c.early || 0, c.workHours != null ? bcTrunc(c.workHours, 2) : c.hours != null ? bcTrunc(c.hours, 2) : null, c.otRaw || c.ot || 0, c.ot || 0, c.otWait ? 1 : 0, c.cong == null ? null : bcTrunc(c.cong, 3), c.paid || 0, c.bh || 0, c.unpaid || 0, c.type || '', c.issue || '', !!c.lateOk, !!c.earlyOk];
+    });
+    var r3 = function (v) { return bcTrunc(v, 3); }, source = sourceMode === 'device' || sourceMode === 'with-device' || (!sourceMode && Object.keys(p.days).some(function (dd) { return p.days[dd].src === 'tool'; })) ? 'device' : sourceMode || 'file';
+    return { tam: !!tam, source: source, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct, summary: S0 };
+  }
   function wfSendCong(u, ym, tam, slot, sourceMode, remove) {
     var r = bcMonth(u, ym, sourceMode), ok = {}; wfPeople(u).forEach(function (x) { ok[x.ma] = 1; });
-    var list = r.ppl.filter(function (p) { return ok[p.id]; }).map(function (p) { return { ma: p.id, du_lieu: wfCongOf(p, tam) }; });
+    var includeAll = sourceMode === 'device' || sourceMode === 'with-device', list = r.ppl.filter(function (p) { return includeAll || ok[p.id]; }).map(function (p) { return { ma: p.id, du_lieu: wfCongOf(p, tam, sourceMode) }; });
     remove = Array.isArray(remove) ? remove : [];
     if (!list.length && !remove.length) return Promise.resolve(0);
     var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoOn(u) ? wfDemoGet : null; if (!call) return Promise.resolve(0);
     var body = { ym: ym, nguoi: ccUser(), list: list, slot: slot || '', source: sourceMode || '' }; if (remove.length) body.remove = remove;
-    return call('cong', body).then(function (j) { if (!tam) { u.wf.sent = u.wf.sent || {}; u.wf.sent[ym] = (bcX(u).lock[ym] || {}).at || nowVn(); } return j.n; });
+    return call('cong', body).then(function (j) { bcSavedSet(u, ym, list, false); if (!tam) { u.wf.sent = u.wf.sent || {}; u.wf.sent[ym] = (bcX(u).lock[ym] || {}).at || nowVn(); } return j.n; });
   }
   function wfPushPin(u, id, pin, e) {
     if (!wfOn(u)) return; e = e || nvIndex(u)[id] || {};

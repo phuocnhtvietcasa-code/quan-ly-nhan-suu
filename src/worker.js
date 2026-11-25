@@ -1073,6 +1073,11 @@ async function api(req, env, url) {
       return jc({ ok: true, n });
     }
     if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' AND trang_thai != 'Đã hủy' ORDER BY tao DESC LIMIT 200").all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
+    if (r === 'cong' && req.method === 'GET') {
+      const ym = String(url.searchParams.get('ym') || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dáº¡ng YYYY-MM' }, 400);
+      const list = (await db.prepare('SELECT ma, du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results.filter(x => demoFind(x.ma));
+      return jc({ ok: true, list: list.map(x => { let du_lieu = {}; try { du_lieu = JSON.parse(x.du_lieu || '{}'); } catch (e) { } return { ma: x.ma, du_lieu }; }) });
+    }
     if (r === 'cong' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
       const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [], keep = new Set(list.map(x => String(x.ma || '').toUpperCase()));
@@ -1368,6 +1373,11 @@ async function api(req, env, url) {
       if (body.slot && body.source === 'device' && body.slot === cfg.cc_device_tinh_due) { await setCfg(db, { cc_device_tinh_due: '', cc_device_tinh_last_slot: body.slot }); cfg.cc_device_tinh_due = ''; cfg.cc_device_tinh_last_slot = body.slot; }
       else if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
       return jc({ ok: true, n: st.length });
+    }
+    if (r === 'cong' && req.method === 'GET') {
+      const ym = String(url.searchParams.get('ym') || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dáº¡ng YYYY-MM' }, 400);
+      const list = (await db.prepare('SELECT ma, du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results;
+      return jc({ ok: true, list: list.map(x => { let du_lieu = {}; try { du_lieu = JSON.parse(x.du_lieu || '{}'); } catch (e) { } return { ma: x.ma, du_lieu }; }) });
     }
     if (r === 'phieu' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
