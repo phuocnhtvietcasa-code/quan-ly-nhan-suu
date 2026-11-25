@@ -10636,8 +10636,30 @@ if (typeof module !== 'undefined') module.exports = XW;
   function bcWorkTxt(v) { return (+v || 0).toFixed(3); }
   function bcStdTxt(v) { return (+v || 0).toFixed(3); }
   function bcWorkRatio(sum) { return bcWorkTxt(sum.work) + '/' + bcStdTxt(sum.stdDays || 0); }
+  function bcPunchTimes(sh, tin, tout) {
+    var i = shiftInfo(sh), ti = ccMin(tin), to = ccMin(tout); if (ti === null || to === null) return null;
+    if (i && i.night) { if (ti < i.a - 360) ti += 1440; if (to <= ti) to += 1440; } else if (to < ti) to += 1440;
+    return { i: i, ti: ti, to: to };
+  }
+  function bcRawWorkedMins(sh, tin, tout) {
+    var p = bcPunchTimes(sh, tin, tout); if (!p) return null;
+    var lunch = 0, i = p.i;
+    if (i && i.gaps) lunch = ccGapOv(p.ti, p.to, i);
+    else {
+      var ba = i && i.ba !== null ? i.ba : (i && i.night ? null : 720), bb = i && i.bb !== null ? i.bb : (i && i.night ? null : 780);
+      if (ba !== null && bb !== null) for (var k = -2; k <= 2; k++) lunch += Math.max(0, Math.min(p.to, bb + k * 1440) - Math.max(p.ti, ba + k * 1440));
+    }
+    return Math.max(0, p.to - p.ti - lunch);
+  }
+  function bcApprovedPunchMins(sh, tin, tout, kind) {
+    var p = bcPunchTimes(sh, tin, tout), i = p && p.i; if (!p || !i) return 0;
+    var pre = +((sh && sh.preOn) || 0), m = kind === 'muon' ? p.ti - (i.a - pre) : i.b - p.to;
+    return Math.max(0, m);
+  }
+  function bcDayWorkedMins(raw, approved) { var m = Math.max(0, (+raw || 0) + (+approved || 0)); return m >= 475 ? 480 : m; }
   function bcExactHours(sh, tin, tout, kind) {
     var i = shiftInfo(sh), ti = ccMin(tin), to = ccMin(tout); if (ti === null || to === null) return null;
+    if (kind !== 'half') { var raw = bcRawWorkedMins(sh, tin, tout); return raw == null ? null : Number((bcDayWorkedMins(raw, 0) / 60).toFixed(2)); }
     if (i && i.night) { if (ti < i.a - 360) ti += 1440; if (to <= ti) to += 1440; } else if (to < ti) to += 1440;
     var a = i ? i.a : ti, b = i ? i.b : to;
     if (kind === 'half' && i) {
@@ -10701,7 +10723,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (fr) { c.file = { k: String(fr['Ký hiệu'] || '').trim().toUpperCase(), tin: fr['Giờ vào'] || '', tout: fr['Giờ ra'] || '', ot: +fr['Giờ tăng ca'] || 0, late: +fr['Đi muộn (phút)'] || 0, note: fr['Ghi chú'] || '' }; S0.fileOt += c.file.ot; }
         c.don = dn || null;
         if ((unsch || (p.exc.sch && lv === 'N' && c.kind === 'rest')) && fr && ccMin(fr['Giờ vào'] || '') !== null) { if (!unsch) c.note.push('Đi làm vào ngày nghỉ theo lịch – khối sản xuất tính vào tổng giờ tháng'); var gs = ccShiftNear(s, fr['Giờ vào']); if (gs) { dsh = c.sh = ccShiftOn(gs, iso); c.kind = 'work'; c.guess = true; c.note.push('Ngày ' + (unsch ? 'chưa xếp ca' : 'nghỉ theo lịch') + ' nhưng có đi làm – phần mềm tự nhận ca ' + gs.id + ' theo giờ vào'); } }
-        var workDay = c.kind === 'work' || c.kind === 'half';
+        var workDay = c.kind === 'work' || c.kind === 'half', exactFullWorkedMins = null;
         if (p.exc.hr && !p.exc.hw) { // 0.3.2: bán thời gian / cộng tác viên – ghi số giờ làm thực tế, không tính ngày công, không báo vắng
           var hti = fr ? (c.file.tin || '') : '', hto = fr ? (c.file.tout || '') : '';
           if (fr && (ccMin(hti) !== null || ccMin(hto) !== null)) {
@@ -10733,6 +10755,11 @@ if (typeof module !== 'undefined') module.exports = XW;
                 else if (st !== 'vuot') c.note.push(d ? 'Đơn ' + d.so + ' xin ' + z[2] + ': ' + d.trang_thai.toLowerCase() + ' – tính theo giờ chấm thực tế' : 'Không có đơn xin ' + z[2]); });
               if (chg) { var rWaived = ccCalcDay(s, dsh, tin2, tout2, 'work', c.kind === 'half' ? 'h' : 'f', p.exc, R), rActual = ccCalcDay(s, dsh, c.file.tin, c.file.tout, 'work', c.kind === 'half' ? 'h' : 'f', p.exc, R); rWaived.worked = rActual.worked; rWaived.workedMinutes = rActual.workedMinutes; rWaived.cong = rActual.cong; r = rWaived; } }
             c.tin = c.file.tin; c.tout = c.file.tout; c.late = r.late; c.early = r.early; c.otRaw = r.otRaw || 0; c.ot = r.ot || 0; c.otWait = !!r.otWait; c.note = c.note.concat(r.note); c.src = 'calc'; c.wk = r.worked; c.night = r.night || 0; c.otNt = r.otNt || 0;
+            if (workDay && c.kind !== 'half' && ccMin(c.file.tin) !== null && ccMin(c.file.tout) !== null) {
+              var rawWorkedMins = bcRawWorkedMins(dsh, c.file.tin, c.file.tout), approvedMins = 0, approvedDay = XMB[p.id + '|' + iso] || {};
+              [['muon', 'muon'], ['som', 'som']].forEach(function (z) { var req = approvedDay[z[0]]; if (!req || req.trang_thai !== 'Đã duyệt') return; var actual = bcApprovedPunchMins(dsh, c.file.tin, c.file.tout, z[1]), allowed = req.phut == null ? actual : Math.max(0, +req.phut || 0); approvedMins += Math.min(actual, allowed); });
+              exactFullWorkedMins = bcDayWorkedMins(rawWorkedMins, approvedMins); c.wk = exactFullWorkedMins / 60; c.cong = Number((exactFullWorkedMins / 480).toFixed(3));
+            }
             if (r.code === '?') { c.k = '?'; c.issue = 'thieu-cham'; }
             else if (r.code === 'KP?') { c.k = 'KP'; c.issue = 'khong-du'; }
             else { c.k = workDay ? (fk && def && def.type === 'work' && fk !== 'X' && fk !== 'X/2' ? fk : r.code) : 'X'; c.cong = workDay ? r.cong : 0; }
@@ -10751,7 +10778,8 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (mm) { c.night = 0; c.otNt = 0; c.wk = null; if (c.tin && c.tout) { var rm = ccCalcDay(s, dsh, c.tin, c.tout, workDay ? 'work' : c.kind, c.kind === 'half' ? 'h' : 'f', {}, R); c.night = rm.night || 0; c.otNt = Math.min(c.otRaw || 0, rm.otNt || 0); c.wk = rm.worked; } }
         if (p.exc.hr && !p.exc.hw && mm) c.hours = c.tin && c.tout ? ccHours(dsh, c.tin, c.tout, R) : null;
         bcApplyCode(s, c);
-        var halfReq = dn && dn.half ? dn : null, xday = XMB[p.id + '|' + iso] || {}, tripRows = ['cong_sang', 'cong_chieu'].map(function (k) { return xday[k]; }).filter(function (z) { return z && z.trang_thai === 'Đã duyệt'; }), tripFullRows = ['di_cong_tac', 'cong_tac', 'di_cong', 'cong'].map(function (k) { return xday[k]; }).filter(function (z) { return z && z.trang_thai === 'Đã duyệt'; }), fullTrip = !!(dn && dn.trip) || tripFullRows.length > 0, tripUnits = fullTrip ? 2 : Math.min(2, tripRows.length), hasTrip = fullTrip || tripRows.length > 0;
+        if (exactFullWorkedMins !== null && !mm) { c.cong = Number((exactFullWorkedMins / 480).toFixed(3)); c.type = 'work'; }
+        var halfReq = dn && dn.half ? dn : null, xday = XMB[p.id + '|' + iso] || {}, tripRows = ['cong_sang', 'cong_chieu'].map(function (k) { return xday[k]; }).filter(function (z) { return z && z.trang_thai === 'Đã duyệt'; }), tripFullRows = ['di_cong_tac', 'cong_tac', 'di_cong', 'cong'].map(function (k) { return xday[k]; }).filter(function (z) { return z && z.trang_thai === 'Đã duyệt'; }), fullTrip = !!(dn && dn.trip) || tripFullRows.length > 0, tripUnits = fullTrip ? 2 : Math.min(2, tripRows.length), hasTrip = fullTrip || tripRows.length > 0, tripBothPunches = ccMin(c.tin) !== null && ccMin(c.tout) !== null, tripFullDay = fullTrip || tripUnits >= 2 || tripBothPunches;
         if ((halfReq || hasTrip) && !mm && workDay) {
           var leaveSession = halfReq ? (halfReq.buoi === 'chieu' ? 'chieu' : 'sang') : '', creditPaid = halfReq ? 0.5 : 0, creditWork = halfReq ? 0 : Math.min(1, tripUnits * 0.5), session = halfReq ? (leaveSession === 'sang' ? 'chieu' : 'sang') : (tripRows.some(function (z) { return z.kieu === 'cong_sang'; }) ? 'chieu' : 'sang');
           var other = bcSessionCalc(s, dsh, c.file, session, p.exc, R), otherWork = other ? (+other.cong || 0) : 0, segment = bcSessionCalc(s, dsh, null, session, p.exc, R);
@@ -10763,7 +10791,7 @@ if (typeof module !== 'undefined') module.exports = XW;
           c.late = other ? other.late || 0 : 0; c.early = other ? other.early || 0 : 0; c.wk = workedMix; c.ot = other ? other.ot || 0 : 0; c.otRaw = other ? other.otRaw || other.ot || 0 : 0; c.otWait = !!(other && other.otWait); c.night = other ? other.night || 0 : 0; c.otNt = other ? other.otNt || 0 : 0;
           if (p.exc.hr) c.hours = workedMix;
           if (halfReq) c.note.push('Đơn nghỉ phép nửa ngày đã duyệt: nghỉ buổi ' + (leaveSession === 'sang' ? 'sáng' : 'chiều') + ' · trừ 0,5 ngày phép năm');
-          tripRows.forEach(function (z) { c.note.push('Đơn ' + z.so + ' ' + xmTypeText(z.kieu).toLowerCase() + ' đã duyệt · tính đủ 0,5 ngày công'); });
+          tripRows.forEach(function (z) { c.note.push('Đơn ' + z.so + ' ' + xmTypeText(z.kieu).toLowerCase() + ' đã duyệt · tính ' + (tripFullDay ? 'đủ ngày công khi đủ lượt vào, ra' : '0,5 ngày công')); });
           tripFullRows.forEach(function (z) { c.note.push('Đơn ' + z.so + ' đi công tác đã duyệt · tính đủ ngày công'); }); if (dn && dn.trip) c.note.push('Đơn ' + (dn.so || '') + ' đi công tác đã duyệt · tính đủ ngày công');
           if (!p.exc.nc && tripUnits < 2 && dataEnd && iso <= dataEnd && iso !== TD && otherWork === 0) c.issue = 'vang';
         }
@@ -10786,13 +10814,14 @@ if (typeof module !== 'undefined') module.exports = XW;
           else if (bothPunches) c.workHours = Number((c.wk || 0).toFixed(2));
           else if (c.cong > 0) c.workHours = bcTrunc(c.cong * (shiftInfo(dsh) ? shiftInfo(dsh).full : 8), 2);
         }
+        if (hasTrip && !mm && workDay && c.type === 'work') { c.workHours = tripFullDay ? 8 : 4; c.cong = tripFullDay ? 1 : 0.5; c.k = tripFullDay ? 'CT' : 'X/2'; c.issue = ''; }
         if (c.workHours == null && ['paid', 'hol', 'bh', 'unpaid'].indexOf(c.type) >= 0) c.workHours = 0;
         if (c.workHours != null) { c.workHours = bcTrunc(c.workHours, 2); S0.attHours += c.workHours; if (p.exc.hr && c.type === 'work') c.hours = c.workHours; }
         if (p.exc.hr && c.type === 'work' && c.hours != null) { S0.hours += c.hours; S0.hDays++; if (p.exc.hw && dsh) { if (dsh.parts) { var pf = dsh.parts.map(function (q) { return (shiftInfo(q) || { full: 0 }).full; }), pt = pf[0] + pf[1] || 1; dsh.parts.forEach(function (q, j) { S0.hBy[q.id] = (S0.hBy[q.id] || 0) + c.hours * pf[j] / pt; }); } else S0.hBy[dsh.id] = (S0.hBy[dsh.id] || 0) + c.hours; } }
         if (p.exc.hr && !p.exc.hw && c.tin && c.tout && c.hours != null && !c.mixAttendance) { var t1 = ccMin(c.tin), t2 = ccMin(c.tout); if (t2 <= t1) t2 += 1440; var hi = dsh ? shiftInfo(dsh) : null; c.night = Math.min(c.hours, ccNightI(t1, t2, hi) / 60); }
         if (c.lc && c.lc !== 'N') S0.sched++; if (c.unsch && !c.guess) S0.unsch++;
         if (dsh && ((c.cong || 0) > 0 || (c.hours || 0) > 0 || (c.type === 'work' && c.ot > 0))) (dsh.parts || [dsh]).forEach(function (q) { S0.ca[q.id] = (S0.ca[q.id] || 0) + 1; });
-        if (hasTrip) c.k = 'CT';
+        if (hasTrip && tripFullDay && !mm) c.k = 'CT';
         if (!c.issue && c.k && c.k !== '?') { var d2 = bcCode(s, c.k); if (d2 && d2.don && !dn && c.src !== 'tay') c.issue = 'thieu-don'; }
         c.otKind = c.kind === 'hol' ? 'H' : c.kind === 'rest' ? 'R' : 'N'; c.otRate = c.otKind === 'H' ? +R.otRateH : c.otKind === 'R' ? +R.otRateR : +R.otRateN;
         if (c.otRaw && !c.ot && !c.otWait) S0.otNo += c.otRaw;
@@ -11700,13 +11729,13 @@ if (typeof module !== 'undefined') module.exports = XW;
     }
   }
   function wfCongOf(p, tam, sourceMode) {
-    var S0 = p.sum, ng = {}, ct = {};
+    var S0 = p.sum, ng = {}, ct = {}, suaTay = {};
     Object.keys(p.days).forEach(function (dd) {
-      var c = p.days[dd]; if (c.src === 'out') return; ng[dd] = c.k || '';
+      var c = p.days[dd]; if (c.src === 'out') return; ng[dd] = c.k || ''; if (c.manual) suaTay[dd] = 1;
       if (c.tin || c.tout || c.workHours != null || c.late || c.early || c.otRaw || c.ot || c.otWait) ct[dd] = [c.tin || '', c.tout || '', c.late || 0, c.early || 0, c.workHours != null ? bcTrunc(c.workHours, 2) : c.hours != null ? bcTrunc(c.hours, 2) : null, c.otRaw || c.ot || 0, c.ot || 0, c.otWait ? 1 : 0, c.cong == null ? null : bcTrunc(c.cong, 3), c.paid || 0, c.bh || 0, c.unpaid || 0, c.type || '', c.issue || '', !!c.lateOk, !!c.earlyOk];
     });
     var r3 = function (v) { return bcTrunc(v, 3); }, source = sourceMode === 'device' || sourceMode === 'with-device' || (!sourceMode && Object.keys(p.days).some(function (dd) { return p.days[dd].src === 'tool'; })) ? 'device' : sourceMode || 'file';
-    return { tam: !!tam, source: source, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct, summary: S0 };
+    return { tam: !!tam, source: source, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct, suaTay: suaTay, summary: S0 };
   }
   function wfSendCong(u, ym, tam, slot, sourceMode, remove) {
     var r = bcMonth(u, ym, sourceMode), ok = {}; wfPeople(u).forEach(function (x) { ok[x.ma] = 1; });
@@ -11747,9 +11776,9 @@ if (typeof module !== 'undefined') module.exports = XW;
   function wfRefreshRequest(u, rows, leave) {
     if (!wfOn(u) && !wfDemoOn(u)) return Promise.resolve(); var months = {}, add = function (v) { var iso = String(v || '').slice(0, 10); if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) months[iso.slice(0, 7)] = 1; };
     (rows || []).forEach(function (d) { var a = String(d['Từ ngày'] || d.ngay || '').slice(0, 10), b = String(d['Đến ngày'] || d.den || a).slice(0, 10); add(a); add(b); var cur = a, guard = 0; while (cur && cur <= b && guard++ < 400) { months[cur.slice(0, 7)] = 1; cur = ccAdd(cur, 1); } });
-    var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoGet, jobs = Object.keys(months).sort().map(function (ym) { var X = bcX(u); return wfSendCong(u, ym, !X.lock[ym]); });
+    var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoGet, jobs = Object.keys(months).sort().map(function (ym) { var X = bcX(u); bcSavedSet(u, ym, [], true); return wfSendCong(u, ym, !X.lock[ym]); });
     if (leave && typeof hsAppSync === 'function') jobs.push(hsAppSync(u, call, false));
-    return Promise.all(jobs).then(function () { saveUnits(); });
+    return Promise.all(jobs).then(function () { saveUnits(); if (curPage === 'cc') render(); });
   }
   // ĐỒNG BỘ 1 công ty
   function wfMineIdx(u) { var o = {}; (u.data.NV || []).forEach(function (e) { if (e['Mã NV']) o[String(e['Mã NV']).toUpperCase()] = 1; }); return o; }

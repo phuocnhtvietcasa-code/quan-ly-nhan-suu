@@ -1277,11 +1277,30 @@ function kType(K, code, L) { if (!code) return ''; var c = String(code).toUpperC
 function leMap(HS) { var o = {}; ((HS && HS.le) || []).forEach(function (x) { o[x.d] = x.t; }); return o; }
 function workDays(HS, ym) { var tu = (HS && HS.lich && HS.lich.tuan) || [1, 2, 3, 4, 5], n = 0, LE = leMap(HS); for (var d = 1; d <= ymDays(ym); d++) { var iso = ym + '-' + (d < 10 ? '0' : '') + d; if (tu.indexOf(isoDow(iso)) >= 0 && !LE[iso]) n++; } return n; }
 function chuanOf(HS, ym) { var tu = (HS && HS.lich && HS.lich.tuan) || [1, 2, 3, 4, 5], n = 0; for (var d = 1; d <= ymDays(ym); d++) if (tu.indexOf(isoDow(ym + '-' + (d < 10 ? '0' : '') + d)) >= 0) n++; return n; }
+function fallbackPunchHours(st, HS, iso, p) {
+  if (!p || !p.a || !p.b) return 0; var a = vp(p.a), b = vp(p.b), ti = +a.h * 60 + +a.mi, to = +b.h * 60 + +b.mi; if (to < ti) to += 1440;
+  var raw = Math.max(0, to - ti - Math.max(0, Math.min(to, 780) - Math.max(ti, 720))), ca = xmCa(st, HS, iso) || { vao: '08:30', ra: '17:30', som: 0 }, approved = 0;
+  if (ca) {
+    var caIn = hmM(ca.vao), start = caIn - (+ca.som || 0), end = hmM(ca.ra); if (end <= caIn) end += 1440; var actualIn = ti, actualOut = to; if (actualIn < caIn - 360) actualIn += 1440; if (actualOut <= actualIn) actualOut += 1440;
+    var late = Math.max(0, actualIn - start), early = Math.max(0, end - actualOut);
+    (st.xm || []).filter(function (x) { return x.ngay === iso && x.trang_thai === 'Đã duyệt'; }).forEach(function (x) { var actual = x.kieu === 'muon' ? late : x.kieu === 'som' ? early : 0; if (actual) approved += Math.min(actual, x.phut == null ? actual : Math.max(0, +x.phut || 0)); });
+  }
+  var mins = raw + approved; return (mins >= 475 ? 480 : Math.max(0, mins)) / 60;
+}
+function approvedTripHours(st, iso, punches) {
+  var xs = (st.xm || []).filter(function (x) { return x.ngay === iso && x.trang_thai === 'Đã duyệt' && (x.kieu === 'cong_sang' || x.kieu === 'cong_chieu'); });
+  var full = (st.don || []).some(function (x) { return x.trang_thai === 'Đã duyệt' && x.tu <= iso && (x.den || x.tu) >= iso && /đi công tác/i.test(String(x.loai || '')) && !/nửa ngày/i.test(String(x.loai || '')); });
+  if (!xs.length && !full) return null;
+  return full || (punches && punches.a && punches.b) ? 8 : Math.min(2, xs.length) * 4;
+}
 // ---- số liệu tháng đang chạy
 function monthStats(st, HS, HSo) {
   var now = vp(st.now), ym = now.y + '-' + now.m, C = st.cong || [], tam = C.filter(function (c) { return c.ym === ym; })[0] || null, dl = tam ? tam.du_lieu : null, gio = null;
   if (dl) gio = totalHoursOf(dl);
-  if (gio == null) { var by = {}; (st.thang || []).forEach(function (r) { var k = fDate(r.t), o = by[k] = by[k] || {}; if (r.loai === 'vao' && !o.a) o.a = r.t; if (r.loai === 'ra') o.b = r.t; }); gio = 0; Object.keys(by).forEach(function (k) { var o = by[k]; if (o.a && o.b && o.b > o.a) { var a = vp(o.a), b = vp(o.b), ti = +a.h * 60 + +a.mi, to = +b.h * 60 + +b.mi, brk = Math.max(0, Math.min(to, 780) - Math.max(ti, 720)); gio += Math.min(8, Math.max(0, (to - ti - brk) / 60)); } }); }
+  if (gio == null) { var by = {}, days = {}; (st.thang || []).forEach(function (r) { var p = vp(r.t), iso = p.y + '-' + p.m + '-' + p.d; if (iso.slice(0, 7) !== ym) return; var o = by[iso] = by[iso] || {}; if (r.loai === 'vao' && !o.a) o.a = r.t; if (r.loai === 'ra') o.b = r.t; }); Object.keys(by).forEach(function (iso) { days[iso] = fallbackPunchHours(st, HS, iso, by[iso]); });
+    var tripDays = {}; (st.xm || []).forEach(function (x) { var d = String(x.ngay || ''); if (x.trang_thai === 'Đã duyệt' && (x.kieu === 'cong_sang' || x.kieu === 'cong_chieu') && d.slice(0, 7) === ym) tripDays[d] = 1; }); (st.don || []).forEach(function (x) { if (x.trang_thai === 'Đã duyệt' && /đi công tác/i.test(String(x.loai || '')) && !/nửa ngày/i.test(String(x.loai || ''))) for (var d = x.tu; d <= (x.den || x.tu); d = isoAdd(d, 1)) if (d.slice(0, 7) === ym) tripDays[d] = 1; });
+    Object.keys(tripDays).forEach(function (iso) { var h = approvedTripHours(st, iso, by[iso]); if (h != null) days[iso] = h; }); gio = Object.keys(days).reduce(function (n, iso) { return n + (+days[iso] || 0); }, 0);
+  }
   var cong = dl ? totalWorkDaysOf(dl) : gio / 8, chuan = chuanOf(HS, ym), Lg = (HS && HS.luong) || (HSo.bl ? { lcb: HSo.bl.lcb, pc: HSo.bl.pc } : null), est = null, sx = HS && HS.lich && HS.lich.sx;
   if (Lg && chuan) { var full = (+Lg.lcb || 0) + (+Lg.pc || 0); est = sx ? full / (chuan * 8) * gio : full * Math.min(1, ((dl && dl.huong) || 0) / chuan); }
   var qp = (HS && HS.qp) || HSo.qp || null;

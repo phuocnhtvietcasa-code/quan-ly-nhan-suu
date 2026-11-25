@@ -551,6 +551,50 @@ async function ccCalcQueue(db, cfg, months) {
   const next = [...new Set(old.concat([...months]).filter(x => /^\d{4}-\d{2}$/.test(x)))].sort().slice(-240), value = JSON.stringify(next);
   await setCfg(db, { cc_tinh_req_months: value }); cfg.cc_tinh_req_months = value;
 }
+async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
+  const ym = iso.slice(0, 7), dd = iso.slice(8, 10), row = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first();
+  if (!row) return false;
+  let data = {}; try { data = JSON.parse(row.du_lieu || '{}'); } catch (e) { return false; }
+  // The management client stores this map with new monthly rows so server-side approval refreshes never replace a hand-edited cell.
+  if (!data.suaTay || data.suaTay[dd]) return false;
+  const start = Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) - VN, punches = (await punchesBetween(db, start, start + 864e5)).filter(x => x.ma === ma && !x.huy).sort((a, b) => a.t - b.t);
+  const first = punches.find(x => x.loai === 'vao'), last = punches.slice().reverse().find(x => x.loai === 'ra'), tin = first ? vnHM(first.t) : '', tout = last ? vnHM(last.t) : '', both = !!(tin && tout);
+  const HS = await hsOf(db, ma, demo), ca = await caNgay(db, cfg, HS, ma, iso), base = ca || { vao: '08:30', ra: '17:30', som: 0 };
+  let ti = hm2min(tin), to = hm2min(tout), plannedIn = hm2min(base.vao), plannedOut = hm2min(base.ra), overnight = plannedIn !== null && plannedOut !== null && plannedOut <= plannedIn, shiftIn = plannedIn - (+base.som || 0), shiftOut = plannedOut;
+  if (overnight) shiftOut += 1440;
+  if (ti !== null && overnight && ti < plannedIn - 360) ti += 1440; if (to !== null && ti !== null && to < ti) to += 1440;
+  const reqs = (await db.prepare("SELECT kieu, phut FROM xin_muon WHERE ma = ? AND ngay = ? AND trang_thai = 'Đã duyệt'").bind(ma, iso).all()).results;
+  const leaves = (await db.prepare("SELECT loai, tu, den, ly_do FROM don WHERE ma = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ?").bind(ma, iso, iso).all()).results;
+  const fullTrip = leaves.some(x => /đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));
+  const halfTrips = reqs.filter(x => x.kieu === 'cong_sang' || x.kieu === 'cong_chieu').length;
+  const halfLeave = leaves.find(x => /nửa ngày/i.test(x.loai || ''));
+  const fullLeave = leaves.find(x => !/đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));
+  let late = both && shiftIn !== null ? Math.max(0, ti - shiftIn) : 0, early = both && shiftOut !== null ? Math.max(0, shiftOut - to) : 0, approved = 0;
+  if (both) for (const x of reqs) if (x.kieu === 'muon' || x.kieu === 'som') { const actual = x.kieu === 'muon' ? late : early; approved += Math.min(actual, x.phut == null ? actual : Math.max(0, +x.phut || 0)); }
+  let raw = both ? Math.max(0, to - ti - Math.max(0, Math.min(to, 780) - Math.max(ti, 720))) : 0, minutes = Math.max(0, raw + approved); minutes = minutes >= 475 ? 480 : minutes;
+  let ng = data.ngay || (data.ngay = {}), ct = data.ct || (data.ct = {}), old = Array.isArray(ct[dd]) ? ct[dd].slice() : [], cell = old.slice(); while (cell.length < 16) cell.push(null);
+  const oldType = cell[12] || '', oldWork = oldType === 'work' ? (+cell[8] || 0) : 0, oldPaid = oldType === 'paid' ? (+cell[9] || 0) : 0, oldHol = oldType === 'hol' ? (+cell[9] || 0) : 0, oldBh = oldType === 'bh' ? (+cell[10] || 0) : 0, oldUnpaid = oldType === 'unpaid' ? (+cell[11] || 0) : 0, oldHours = +cell[4] || 0;
+  let code = '', type = 'work', worked = 0, ratio = 0, paid = 0, bh = 0, unpaid = 0;
+  if (fullTrip || halfTrips) {
+    const full = fullTrip || halfTrips >= 2 || both; worked = full ? 480 : 240; code = full ? 'CT' : 'X/2'; ratio = worked / 480;
+  } else if (fullLeave) {
+    const text = String(fullLeave.loai || ''); code = /thai/i.test(text) ? 'TS' : /ốm|bệnh/i.test(text) ? 'Ô' : /không lương/i.test(text) ? 'KL' : /việc riêng|kết hôn|cưới|tang|hiếu|hỷ/i.test(text) ? 'R' : 'PN';
+    type = code === 'PN' || code === 'R' ? 'paid' : code === 'KL' ? 'unpaid' : 'bh'; paid = type === 'paid' ? 1 : 0; bh = type === 'bh' ? 1 : 0; unpaid = type === 'unpaid' ? 1 : 0;
+  } else if (halfLeave) {
+    const buoi = requestText(halfLeave.ly_do).buoi === 'chieu' ? 'chieu' : 'sang', from = hm2min(base.vao) == null ? 480 : hm2min(base.vao), toShift = hm2min(base.ra) == null ? 1020 : hm2min(base.ra) + (hm2min(base.ra) <= from ? 1440 : 0), a = buoi === 'sang' ? Math.max(from, 780) : from, b = buoi === 'sang' ? toShift : Math.min(toShift, 720), workFrom = ti == null ? 0 : Math.max(ti, a), workTo = to == null ? 0 : Math.min(to, b);
+    worked = both ? Math.min(240, Math.max(0, workTo - workFrom - Math.max(0, Math.min(workTo, 780) - Math.max(workFrom, 720)))) : 0; code = 'X/2'; ratio = worked / 480; type = 'work'; paid = 0.5;
+  } else if (both) {
+    worked = minutes; ratio = worked / 480; code = ng[dd] || 'X';
+  } else return false;
+  cell[0] = tin; cell[1] = tout; cell[2] = late > 5 ? late : 0; cell[3] = early > 5 ? early : 0; cell[4] = worked ? Number((worked / 60).toFixed(2)) : 0;
+  cell[8] = Number(ratio.toFixed(3)); cell[9] = paid; cell[10] = bh; cell[11] = unpaid; cell[12] = type; cell[13] = ''; cell[14] = reqs.some(x => x.kieu === 'muon') ? 1 : 0; cell[15] = reqs.some(x => x.kieu === 'som') ? 1 : 0;
+  ng[dd] = code; ct[dd] = cell;
+  const newWork = type === 'work' ? ratio : 0, newPaid = type === 'paid' ? paid : 0, newHol = type === 'hol' ? paid : 0, newBh = type === 'bh' ? bh : 0, newUnpaid = type === 'unpaid' ? unpaid : 0, dh = cell[4] - oldHours, dw = newWork - oldWork, dp = newPaid - oldPaid, dhol = newHol - oldHol, dbh = newBh - oldBh, dup = newUnpaid - oldUnpaid, dsal = dw + dp + dhol;
+  const r3 = n => Number((+n || 0).toFixed(3)); data.cong = r3((+data.cong || 0) + dw); data.phep = r3((+data.phep || 0) + dp); data.le = r3((+data.le || 0) + dhol); data.huong = r3((+data.huong || 0) + dsal);
+  if (data.summary && typeof data.summary === 'object') { const s = data.summary; s.work = r3((+s.work || 0) + dw); s.paid = r3((+s.paid || 0) + dp); s.hol = r3((+s.hol || 0) + dhol); s.bh = r3((+s.bh || 0) + dbh); s.unpaid = r3((+s.unpaid || 0) + dup); s.salary = r3((+s.salary || 0) + dsal); s.attHours = Number(((+s.attHours || 0) + dh).toFixed(2)); }
+  await db.prepare('UPDATE cong SET du_lieu = ?, xn = 0, xn_at = NULL, phan_hoi = NULL WHERE ym = ? AND ma = ?').bind(JSON.stringify(data), ym, ma).run();
+  return true;
+}
 async function ccCalcClearMonth(db, cfg, ym) {
   let old = []; try { old = JSON.parse(cfg.cc_tinh_req_months || '[]'); } catch (e) { }
   if (!Array.isArray(old)) old = [];
@@ -1896,7 +1940,7 @@ async function api(req, env, url) {
       if (!duocDuyet(await hsLite(db, demo), s.nv.ma, x0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
       const r = await db.prepare("UPDATE xin_muon SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
       if (!r.meta.changes) return bad('Đơn này vừa được người khác xử lý.');
-      if (ok) await ccCalcQueue(db, cfg, new Set(ccReqMonths(x0.ngay, x0.ngay)));
+      if (ok) { await ccPersistApprovedDay(db, cfg, x0.ma, x0.ngay, demo).catch(e => console.error('ccPersistApprovedDay', e)); await ccCalcQueue(db, cfg, new Set(ccReqMonths(x0.ngay, x0.ngay))); }
       later(req, requestNotice(db, cfg, url.origin, demo, [x0.ma], 'Đơn ' + xmTypeName(x0.kieu) + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), x0.ngay.slice(8) + '/' + x0.ngay.slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
       return json({ ok: true, nguoi: s.nv.ten });
     }
@@ -1906,7 +1950,11 @@ async function api(req, env, url) {
     if (!duocDuyet(await hsLite(db, demo), s.nv.ma, d0)) return bad('Đơn này không thuộc quyền duyệt của anh/chị.');
     // nhiều người cùng có quyền: ai bấm trước thì đơn chuyển trạng thái và ghi tên người đó; người bấm sau nhận thông báo đã xử lý
     const r = await db.prepare("UPDATE don SET trang_thai = ?, nguoi_duyet = ?, ngay_duyet = ?, ly_do_tc = ?, cap_nhat = ? WHERE so = ? AND trang_thai = 'Chờ duyệt'").bind(ok ? 'Đã duyệt' : 'Từ chối', s.nv.ten, isoVN(now), ok ? null : ly, now, so).run();
-    if (r.meta.changes && ok) await ccCalcQueue(db, cfg, new Set(ccReqMonths(d0.tu, d0.den)));
+    if (r.meta.changes && ok) {
+      const den = d0.den || d0.tu; let guard = 0;
+      for (let d = d0.tu; d <= den && guard++ < 400; d = addDaysIso(d, 1)) await ccPersistApprovedDay(db, cfg, d0.ma, d, demo).catch(e => console.error('ccPersistApprovedDay', e));
+      await ccCalcQueue(db, cfg, new Set(ccReqMonths(d0.tu, den)));
+    }
     if (r.meta.changes) later(req, requestNotice(db, cfg, url.origin, demo, [d0.ma], 'Đơn ' + String(d0.loai || 'nghỉ').toLowerCase() + ' ' + (ok ? 'đã được duyệt' : 'bị từ chối'), String(d0.tu || '').slice(8) + '/' + String(d0.tu || '').slice(5, 7) + ' · ' + s.nv.ten + (ok ? '' : ': ' + ly), so, req, now));
     return r.meta.changes ? json({ ok: true, nguoi: s.nv.ten }) : bad('Đơn này vừa được người khác xử lý.');
   }
