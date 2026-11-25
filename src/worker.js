@@ -567,6 +567,7 @@ async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
   const oldDay = data.ct && Array.isArray(data.ct[dd]) ? data.ct[dd] : [], oldCode = String(data.ngay && data.ngay[dd] || '').toUpperCase(), storedHoliday = oldDay[12] === 'hol' || oldCode === 'L';
   if (weekend && (weekend.ngayTrucCN === iso || weekend.ngayNghiBuT7 === iso) && storedHoliday) return false;
   const sundayDuty = !!(weekend && weekend.ngayTrucCN === iso), compSaturday = !!(weekend && weekend.ngayNghiBuT7 === iso);
+  if (isoDowW(iso) === 0 && !sundayDuty) return false;
   // The management client stores this map with new monthly rows so server-side approval refreshes never replace a hand-edited cell.
   if ((!data.suaTay && !weekend) || (data.suaTay && data.suaTay[dd])) return false;
   if (!data.suaTay) data.suaTay = {};
@@ -589,7 +590,7 @@ async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
   const oldType = cell[12] || '', oldWork = oldType === 'work' ? (+cell[8] || 0) : 0, oldPaid = oldType === 'paid' ? (+cell[9] || 0) : 0, oldHol = oldType === 'hol' ? (+cell[9] || 0) : 0, oldBh = oldType === 'bh' ? (+cell[10] || 0) : 0, oldUnpaid = oldType === 'unpaid' ? (+cell[11] || 0) : 0, oldHours = +cell[4] || 0, oldOt = cell[6] == null ? (+cell[5] || 0) : (+cell[6] || 0), oldOtRaw = +cell[5] || 0, oldOtWait = !!cell[7];
   let code = '', type = 'work', worked = 0, ratio = 0, paid = 0, bh = 0, unpaid = 0;
   if (fullTrip || halfTrips) {
-    const full = fullTrip || halfTrips >= 2 || both; worked = full ? 480 : 240; code = full ? 'CT' : 'X/2'; ratio = worked / 480;
+    const full = fullTrip || halfTrips >= 2 || both; worked = full ? 480 : 240; code = fullTrip ? 'CT' : sundayDuty ? full ? 'X' : 'X/2' : full ? 'CT' : 'X/2'; ratio = worked / 480;
   } else if (fullLeave) {
     const text = String(fullLeave.loai || ''); code = /thai/i.test(text) ? 'TS' : /ốm|bệnh/i.test(text) ? 'Ô' : /không lương/i.test(text) ? 'KL' : /việc riêng|kết hôn|cưới|tang|hiếu|hỷ/i.test(text) ? 'R' : 'PN';
     type = code === 'PN' || code === 'R' ? 'paid' : code === 'KL' ? 'unpaid' : 'bh'; paid = type === 'paid' ? 1 : 0; bh = type === 'bh' ? 1 : 0; unpaid = type === 'unpaid' ? 1 : 0;

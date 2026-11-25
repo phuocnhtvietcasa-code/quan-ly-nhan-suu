@@ -10643,6 +10643,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   function bcRawWorkedMins(sh, tin, tout) {
     var p = bcPunchTimes(sh, tin, tout); if (!p) return null;
+    if (sh && sh.noLunch) return Math.max(0, p.to - p.ti);
     var lunch = 0, i = p.i;
     if (i && i.gaps) lunch = ccGapOv(p.ti, p.to, i);
     else {
@@ -10705,12 +10706,13 @@ if (typeof module !== 'undefined') module.exports = XW;
       days.forEach(function (iso) {
         var dsh = p.sh, lv = p.lc ? p.lc[iso] : '', K = null, unsch = false;
         if (lv && lv !== 'N') dsh = ccShiftCode(s, lv) || p.sh;
-        dsh = ccShiftOn(dsh, iso); // 12/11: giờ riêng theo thứ + yêu cầu có mặt sớm
+        var weekendSunApproved = !!weekendDuty[p.id + '|' + iso];
+        dsh = weekendSunApproved ? { id: 'CN', name: 'Trực Chủ nhật', inT: '09:00', outT: '17:00', bFrom: '', bTo: '', days: { 0: 'f' }, noLunch: 1 } : ccShiftOn(dsh, iso); // Trực CN đã duyệt: dùng ca 09:00–17:00, không nghỉ trưa
         K = bcKind(s, dsh, iso);
         if (lv === 'N') { if (K.k !== 'hol') K = { k: 'rest', h: null }; }
         else if (lv) { if (K.k !== 'hol') K = { k: 'work', h: K.h && K.h.k === 'lb' ? K.h : null }; }
         else if (p.exc.sch && K.k !== 'hol') { K = { k: 'rest', h: null }; unsch = true; }
-        var dd = iso.slice(8, 10), c = { iso: iso, dd: dd, kind: K.k, hol: K.h, k: '', cong: null, tin: '', tout: '', late: 0, early: 0, otRaw: 0, ot: 0, otWait: false, otOk: false, src: '', issue: '', note: [], file: null, don: null, sh: dsh, lc: lv || '', unsch: unsch, night: 0, otNt: 0 }, weekendSun = !!weekendDuty[p.id + '|' + iso] && c.kind !== 'hol', weekendSat = !!weekendComp[p.id + '|' + iso] && c.kind !== 'hol';
+        var dd = iso.slice(8, 10), c = { iso: iso, dd: dd, kind: K.k, hol: K.h, k: '', cong: null, tin: '', tout: '', late: 0, early: 0, otRaw: 0, ot: 0, otWait: false, otOk: false, src: '', issue: '', note: [], file: null, don: null, sh: dsh, lc: lv || '', unsch: unsch, night: 0, otNt: 0 }, weekendSun = weekendSunApproved && c.kind !== 'hol', weekendSat = !!weekendComp[p.id + '|' + iso] && c.kind !== 'hol';
         if ((p.join && iso < p.join) || (p.left && iso > p.left)) { c.src = 'out'; p.days[dd] = c; return; }
         if (!weekendSun) { if (c.kind === 'work') S0.stdDays += 1; else if (c.kind === 'half') S0.stdDays += 0.5; }
         if (!p.exc.hr && !weekendSun) { if (c.kind === 'work') S0.std += 1; else if (c.kind === 'half') S0.std += 0.5; }
@@ -10726,8 +10728,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         var workDay = c.kind === 'work' || c.kind === 'half', exactFullWorkedMins = null; if (weekendSun) { c.kind = 'work'; workDay = true; }
         var weekendX = XMB[p.id + '|' + iso] || {}, weekendHasPunch = !!(c.file && (ccMin(c.file.tin) !== null || ccMin(c.file.tout) !== null)), weekendHasTrip = !!dn || ['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'].some(function (k) { return weekendX[k] && weekendX[k].trang_thai === 'Đã duyệt'; }), weekendSatOff = weekendSat && !weekendHasPunch && !weekendHasTrip;
         if (weekendSatOff) { c.kind = 'rest'; c.k = ''; c.cong = 0; c.type = 'rest'; c.issue = ''; c.src = 'don'; c.note.push('Nghỉ bù Thứ 7 đã duyệt – ngày nghỉ theo lịch, không tính công'); }
-        else if (weekendSun) { c.tin = c.file ? c.file.tin : ''; c.tout = c.file ? c.file.tout : ''; c.type = 'work'; c.src = 'don'; c.otRaw = c.ot = 0; c.otWait = false; c.otNt = 0; var sunIn = ccMin(c.tin), sunOut = ccMin(c.tout); if (sunIn !== null && sunOut !== null) { if (sunOut < sunIn) sunOut += 1440; var sunRaw = Math.max(0, sunOut - sunIn), sunMinutes = Math.min(480, sunRaw >= 475 ? 480 : sunRaw); exactFullWorkedMins = sunMinutes; c.cong = sunMinutes / 480; c.wk = sunMinutes / 60; c.k = sunMinutes >= 475 ? 'X' : 'X/2'; c.late = Math.max(0, sunIn - 540); c.early = Math.max(0, 1020 - sunOut); c.issue = ''; c.note.push('Trực Chủ nhật đã duyệt: ca 09:00–17:00, không trừ giờ nghỉ trưa; tối đa 8 giờ công'); } else { c.cong = 0; c.k = '?'; c.issue = 'vang'; c.note.push('Đơn trực Chủ nhật đã duyệt nhưng thiếu giờ vào hoặc giờ ra'); } }
-        else if (p.exc.hr && !p.exc.hw) { // 0.3.2: bán thời gian / cộng tác viên – ghi số giờ làm thực tế, không tính ngày công, không báo vắng
+        else if (p.exc.hr && !p.exc.hw && !weekendSun) { // 0.3.2: bán thời gian / cộng tác viên – ghi số giờ làm thực tế, không tính ngày công, không báo vắng
           var hti = fr ? (c.file.tin || '') : '', hto = fr ? (c.file.tout || '') : '';
           if (fr && (ccMin(hti) !== null || ccMin(hto) !== null)) {
             c.tin = hti; c.tout = hto; c.src = 'calc';
@@ -10739,7 +10740,7 @@ if (typeof module !== 'undefined') module.exports = XW;
           } else if (fr && c.file.k) { c.k = c.file.k; c.src = 'file'; }
           else if (dn && workDay) { c.k = dn.code; c.src = 'don'; }
           else if (c.kind === 'hol') { c.k = 'L'; c.src = 'le'; }
-        } else if (p.exc.nc) {
+        } else if (p.exc.nc && !weekendSun) {
           if (dn && workDay) { c.k = dn.code; c.src = 'don'; }
           else if (c.kind === 'hol') { c.k = 'L'; c.src = 'le'; }
           else if (workDay) { c.k = c.kind === 'half' ? 'X/2' : 'X'; c.cong = c.kind === 'half' ? 0.5 : 1; c.src = 'auto'; c.note.push('Không cần chấm công – tự tính đủ công'); }
@@ -10761,7 +10762,7 @@ if (typeof module !== 'undefined') module.exports = XW;
             if (workDay && c.kind !== 'half' && ccMin(c.file.tin) !== null && ccMin(c.file.tout) !== null) {
               var rawWorkedMins = bcRawWorkedMins(dsh, c.file.tin, c.file.tout), approvedMins = 0, approvedDay = XMB[p.id + '|' + iso] || {};
               [['muon', 'muon'], ['som', 'som']].forEach(function (z) { var req = approvedDay[z[0]]; if (!req || req.trang_thai !== 'Đã duyệt') return; var actual = bcApprovedPunchMins(dsh, c.file.tin, c.file.tout, z[1]), allowed = req.phut == null ? actual : Math.max(0, +req.phut || 0); approvedMins += Math.min(actual, allowed); });
-              exactFullWorkedMins = bcDayWorkedMins(rawWorkedMins, approvedMins); c.wk = exactFullWorkedMins / 60; c.cong = Number((exactFullWorkedMins / 480).toFixed(3));
+              exactFullWorkedMins = bcDayWorkedMins(rawWorkedMins, approvedMins); if (weekendSun) exactFullWorkedMins = Math.min(480, exactFullWorkedMins); c.wk = exactFullWorkedMins / 60; c.cong = Number((exactFullWorkedMins / 480).toFixed(3));
             }
             if (r.code === '?') { c.k = '?'; c.issue = 'thieu-cham'; }
             else if (r.code === 'KP?') { c.k = 'KP'; c.issue = 'khong-du'; }
@@ -10817,7 +10818,15 @@ if (typeof module !== 'undefined') module.exports = XW;
           else if (bothPunches) c.workHours = Number((c.wk || 0).toFixed(2));
           else if (c.cong > 0) c.workHours = bcTrunc(c.cong * (shiftInfo(dsh) ? shiftInfo(dsh).full : 8), 2);
         }
-        if (hasTrip && !mm && workDay && c.type === 'work') { c.workHours = tripFullDay ? 8 : 4; c.cong = tripFullDay ? 1 : 0.5; c.k = tripFullDay ? 'CT' : 'X/2'; c.issue = ''; }
+         if (hasTrip && !mm && workDay && c.type === 'work') { c.workHours = tripFullDay ? 8 : 4; c.cong = tripFullDay ? 1 : 0.5; c.k = tripFullDay ? 'CT' : 'X/2'; c.issue = ''; }
+         if (weekendSun && !mm && !dn) {
+           var sundayIn = ccMin(c.tin) !== null, sundayOut = ccMin(c.tout) !== null;
+           c.type = 'work';
+           c.otRaw = c.ot = 0; c.otWait = false; c.otNt = 0;
+           if (hasTrip) { c.workHours = tripFullDay ? 8 : 4; c.cong = tripFullDay ? 1 : 0.5; c.k = fullTrip ? 'CT' : tripFullDay ? 'X' : 'X/2'; c.issue = ''; }
+           else if (!sundayIn || !sundayOut) { c.cong = 0; c.wk = 0; c.workHours = 0; c.k = '?'; c.issue = 'vang'; c.src = 'don'; }
+           else if (exactFullWorkedMins !== null) { c.wk = exactFullWorkedMins / 60; c.cong = Number((exactFullWorkedMins / 480).toFixed(3)); c.workHours = Number((exactFullWorkedMins / 60).toFixed(2)); c.k = exactFullWorkedMins >= 475 ? 'X' : 'X/2'; c.issue = ''; c.src = 'don'; if (p.exc.hr) c.hours = c.workHours; }
+         }
         if (c.workHours == null && ['paid', 'hol', 'bh', 'unpaid'].indexOf(c.type) >= 0) c.workHours = 0;
         if (c.workHours != null) { c.workHours = bcTrunc(c.workHours, 2); S0.attHours += c.workHours; if (p.exc.hr && c.type === 'work') c.hours = c.workHours; }
         if (p.exc.hr && c.type === 'work' && c.hours != null) { S0.hours += c.hours; S0.hDays++; if (p.exc.hw && dsh) { if (dsh.parts) { var pf = dsh.parts.map(function (q) { return (shiftInfo(q) || { full: 0 }).full; }), pt = pf[0] + pf[1] || 1; dsh.parts.forEach(function (q, j) { S0.hBy[q.id] = (S0.hBy[q.id] || 0) + c.hours * pf[j] / pt; }); } else S0.hBy[dsh.id] = (S0.hBy[dsh.id] || 0) + c.hours; } }
