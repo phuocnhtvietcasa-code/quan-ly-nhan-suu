@@ -3316,15 +3316,82 @@ var HR = (function () {
     var step = Number(item._currentStep || item.currentStep || approval.currentStep || 1);
     return isFinite(total) && isFinite(step) && total > 0 && step > 0 && step <= total;
   };
+  window.npApproval = function (unit, item) {
+    item = item && typeof item === 'object' ? item : {};
+    function chainItems(raw) {
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === 'string') {
+        var text = raw.trim();
+        if (text && (text.charAt(0) === '[' || text.charAt(0) === '{')) { try { return chainItems(JSON.parse(text)); } catch (e) { return []; } }
+        return text ? [text] : [];
+      }
+      if (typeof raw === 'number') return raw ? [raw] : [];
+      if (!raw || typeof raw !== 'object') return [];
+      if (raw.chain != null) { var chain = chainItems(raw.chain); if (chain.length) return chain; }
+      if (Array.isArray(raw.approvers) && raw.approvers.length) return raw.approvers;
+      if (Array.isArray(raw.approverIds) && raw.approverIds.length) return raw.approverIds;
+      if (raw.levels != null) { var levels = chainItems(raw.levels); if (levels.length) return levels; }
+      var out = [], found = false;
+      for (var i = 1; i <= 5; i++) {
+        var keys = ['cap' + i, 'level' + i, 'level_' + i, String(i)];
+        for (var j = 0; j < keys.length; j++) if (Object.prototype.hasOwnProperty.call(raw, keys[j])) { out.push(raw[keys[j]]); found = true; break; }
+      }
+      if (found) return out;
+      return raw.approverId || raw.approverName || raw.ma || raw.ten || raw.id || raw.name ? [raw] : [];
+    }
+    function historyItems(raw) {
+      if (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { return []; } }
+      if (Array.isArray(raw)) return raw.filter(function (x) { return x && typeof x === 'object'; }).map(function (x, i) { return x.step == null ? Object.assign({ step: i + 1 }, x) : x; });
+      if (!raw || typeof raw !== 'object') return [];
+      if (raw.approvalHistory != null) return historyItems(raw.approvalHistory);
+      if (raw.history != null) return historyItems(raw.history);
+      if (raw.steps != null) return historyItems(raw.steps);
+      if (raw.step != null || raw.action) return [raw.step == null ? Object.assign({ step: 1 }, raw) : raw];
+      return Object.keys(raw).sort(function (a, b) { return (+a || 0) - (+b || 0); }).map(function (key) {
+        var x = raw[key]; if (!x || typeof x !== 'object') return null;
+        return x.step == null ? Object.assign({ step: +key || 0 }, x) : x;
+      }).filter(Boolean);
+    }
+    var approval = item._approval && typeof item._approval === 'object' ? item._approval : item.approval && typeof item.approval === 'object' ? item.approval : {};
+    var raw = item._approvalChain, chain = chainItems(raw);
+    if (!chain.length) { raw = item.approvalChain; chain = chainItems(raw); }
+    if (!chain.length) { raw = approval.chain || approval.levels || approval; chain = chainItems(raw); }
+    chain = chain.map(function (x) {
+      if (x && typeof x === 'object' && x.approver && typeof x.approver === 'object') x = x.approver;
+      if (x && typeof x === 'object') return { approverId: String(x.approverId || x.ma || x.id || ''), approverName: String(x.approverName || x.ten || x.name || '') };
+      return { approverId: String(x || ''), approverName: '' };
+    }).filter(function (x) { return x.approverId; }).slice(0, 5);
+    var total = Number(item._totalSteps || item.totalSteps || approval.totalSteps || chain.length), step = Number(item._currentStep || item.currentStep || approval.currentStep || 1);
+    total = isFinite(total) && total > 0 ? total : chain.length; step = isFinite(step) && step > 0 ? step : 1;
+    var current = String(item._currentApproverId || item.currentApproverId || approval.currentApproverId || item.duyet_ma || (chain[step - 1] || {}).approverId || ''), history = historyItems(item._approvalHistory || item.approvalHistory || approval.approvalHistory || []);
+    return { chain: chain, currentStep: step, totalSteps: total, currentApproverId: current, history: history };
+  };
   window.npApprovalBadge = function (unit, item) {
     item = item && typeof item === 'object' ? item : {};
     var status = item['Trạng thái'] || item.trang_thai || item.status || '';
     if (!window.npPending(item)) return typeof esc === 'function' ? esc(status) : String(status);
-    var approval = item._approval && typeof item._approval === 'object' ? item._approval : item.approval && typeof item.approval === 'object' ? item.approval : {};
-    var chain = item._approvalChain || item.approvalChain || approval.chain || approval.levels || approval.approvers || approval.approverIds;
-    var total = Number(item._totalSteps || item.totalSteps || approval.totalSteps || (Array.isArray(chain) ? chain.length : 0));
-    var step = Number(item._currentStep || item.currentStep || approval.currentStep || 1);
-    return isFinite(total) && total > 0 ? 'Đang chờ duyệt (Cấp ' + (isFinite(step) && step > 0 ? step : 1) + '/' + total + ')' : 'Đang chờ duyệt';
+    var p = window.npApproval(unit, item);
+    return p.totalSteps ? 'Đang chờ duyệt (Cấp ' + p.currentStep + '/' + p.totalSteps + ')' : 'Đang chờ duyệt';
+  };
+  window.npApprovalTrail = function (unit, item) {
+    var p = window.npApproval(unit, item), chain = Array.isArray(p.chain) ? p.chain : [], history = Array.isArray(p.history) ? p.history : [];
+    if (!chain.length) return '';
+    var safe = function (value) { return typeof esc === 'function' ? esc(value) : String(value == null ? '' : value); };
+    return '<small class="np-approval-trail">' + chain.map(function (x, i) {
+      var step = i + 1, hs = history.filter(function (z) { return +z.step === step; }), h = hs[hs.length - 1], icon = h && h.action === 'approved' ? '✓' : h && h.action === 'rejected' ? '✕' : window.npPending(item) && p.currentStep === step ? '⏳' : '○';
+      return icon + ' Cấp ' + step + ': ' + safe(x.approverName || x.approverId);
+    }).join(' → ') + '</small>';
+  };
+  window.npApprovalTrailText = function (unit, item) {
+    var p = window.npApproval(unit, item), chain = Array.isArray(p.chain) ? p.chain : [], history = Array.isArray(p.history) ? p.history : [];
+    return chain.map(function (x, i) {
+      var step = i + 1, hs = history.filter(function (z) { return +z.step === step; }), h = hs[hs.length - 1];
+      return (h && h.action === 'approved' ? '✓ ' : h && h.action === 'rejected' ? '✕ ' : i + 1 < p.currentStep ? '✓ ' : i + 1 === p.currentStep ? '⏳ ' : '○ ') + 'Cấp ' + step + ': ' + (x.approverName || x.approverId);
+    }).join(' → ');
+  };
+  window.npCanApprove = function (unit, item) {
+    var actor = ''; try { actor = window.SV && window.SV.me && window.SV.me.ma ? String(window.SV.me.ma) : ''; } catch (e) { }
+    return !!actor && actor === window.npApproval(unit, item).currentApproverId;
   };
   function dashboard(units, opts) {
     units = Array.isArray(units) ? units : []; opts = opts || {};
@@ -3699,14 +3766,14 @@ var HRR = (function (HR) {
       var progress = window.npApprovalBadge(unit, x);
       var reqType = x['Loại nghỉ'] || x.loai || x.kieu || 'Đơn nghỉ', reqDays = x['Số ngày'] == null ? x.so_ngay : x['Số ngày'];
       push('don_pending', lv, x['Mã NV'] || x.ma, reqType + ' ' + (reqDays == null ? '' : reqDays) + ' ngày · ' + progress + ' – ' + (days === null ? 'chờ duyệt' : days < 0 ? 'đã qua ngày nghỉ ' + (-days) + ' ngày' : 'nghỉ sau ' + days + ' ngày'),
-        'Đơn ' + (x['Số đơn'] || x.so || '') + (from ? ' từ ' + vn(from) : '') + (to ? ' đến ' + vn(to) : '') + (npApprovalTrailText(unit, x) ? ' · ' + npApprovalTrailText(unit, x) : '') + ', người duyệt: ' + (x['Người duyệt'] || x.nguoi_duyet || '?') + (x['Lý do'] || x.ly_do ? '. Lý do: ' + (x['Lý do'] || x.ly_do) : '') + '.', { days: days, due: from || null, k: x['Số đơn'] || x.so || '', sources: ['Đơn nghỉ phép'] });
+        'Đơn ' + (x['Số đơn'] || x.so || '') + (from ? ' từ ' + vn(from) : '') + (to ? ' đến ' + vn(to) : '') + (window.npApprovalTrailText(unit, x) ? ' · ' + window.npApprovalTrailText(unit, x) : '') + ', người duyệt: ' + (x['Người duyệt'] || x.nguoi_duyet || '?') + (x['Lý do'] || x.ly_do ? '. Lý do: ' + (x['Lý do'] || x.ly_do) : '') + '.', { days: days, due: from || null, k: x['Số đơn'] || x.so || '', sources: ['Đơn nghỉ phép'] });
     });
     var xmNames = { muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Đi công tác' };
     HR.tableRows(unit && unit.wf && unit.wf.xm).forEach(function (x) {
-      if (!npPending(x)) return;
+      if (!window.npPending(x)) return;
       var id = x.ma || x.employeeId || x.ma_nv || x['Mã NV'] || '', type = x.kieu || x.loai || x.type || '', label = xmNames[type] || type || 'Đơn đi muộn / về sớm / công tác';
       var date = x.ngay || x.date || HR.requestStart(x), dateNum = date ? dnum(String(date).slice(0, 10)) : null, days = dateNum === null ? null : dateNum - r;
-      var level = days === null ? 'canh' : days < 0 ? 'gap' : days <= cfg.leavePendingSoon ? 'gap' : 'canh', progress = npApprovalBadge(unit, x), trail = npApprovalTrailText(unit, x);
+      var level = days === null ? 'canh' : days < 0 ? 'gap' : days <= cfg.leavePendingSoon ? 'gap' : 'canh', progress = window.npApprovalBadge(unit, x), trail = window.npApprovalTrailText(unit, x);
       push('xm_pending', level, id, label + ' · ' + progress + ' · ' + (days === null ? 'chờ duyệt' : days < 0 ? 'đã qua ngày ' + (-days) + ' ngày' : 'sau ' + days + ' ngày'),
         'Đơn ' + (x.so || x['Số đơn'] || '') + (date ? ' · ' + vn(String(date).slice(0, 10)) : '') + (x.gio ? ' · ' + x.gio : '') + (x.phut ? ' · ' + x.phut + ' phút' : '') + (trail ? ' · ' + trail : '') + ', người duyệt: ' + (x.nguoi_duyet || '?') + (x.ly_do ? '. Lý do: ' + x.ly_do : '') + '.',
         { days: days, due: date || null, k: x.so || x['Số đơn'] || (type + '|' + date), sources: ['Đơn đi muộn, về sớm, công tác'] });
