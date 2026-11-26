@@ -10635,7 +10635,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         kieu: x.kieu || x.loai || x.type || '', trang_thai: x.trang_thai || x.status || '' });
     });
   }
-  function xmTypeText(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Đi công tác' })[k] || 'Đi muộn, về sớm, công tác'; }
+  function xmTypeText(k) { return ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Đi công tác' })[k] || (/công tác/i.test(String(k || '')) ? String(k) : 'Đi muộn, về sớm, công tác'); }
   function xmCard(u, s) {
     var X = xmCfg(s, u), rad = function (k, v, t) { return '<label class="tl-ro"><input type="radio" name="xm_' + k + '" data-xm="' + k + '" value="' + v + '"' + (String(X[k]) === v ? ' checked' : '') + (X.on ? '' : ' disabled') + '><span>' + t + '</span></label>'; };
     return '<div class="card card-pad tl-xm" style="grid-column:1/-1"><div class="card-head"><div><h3>Đơn xin đi muộn, về sớm, công tác</h3><p>Nhân viên gửi trên app → người duyệt đơn nghỉ duyệt trên app (hoặc tại trang <a href="#np">Nghỉ phép</a>) → Tổng hợp công tính theo kết quả. Áp dụng cả công ty, cả 2 khối.</p></div>' +
@@ -11011,7 +11011,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       if (!d || typeof d !== 'object') return;
       var status = d['Trạng thái'] || d.trang_thai || d.status || '', from = HR.requestStart(d), type = String(d['Loại nghỉ'] || d.loai || ''), id = d['Mã NV'] || d.ma || '';
       if (status !== 'Đã duyệt' || !from || type === 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7') return;
-      var trip = /^đi công tác$/i.test(type), code = trip ? 'CT' : 'PN'; BC_LEAVE.some(function (b) { if (b[0].test(type)) { code = b[1]; return true; } });
+      var trip = /công tác/i.test(type), code = trip ? 'CT' : 'PN'; BC_LEAVE.some(function (b) { if (b[0].test(type)) { code = b[1]; return true; } });
       (dons[id] = dons[id] || []).push({ from: from, to: HR.requestEnd(d) || from, code: code, so: d['Số đơn'] || d.so, t: type, trip: trip, half: /phép nửa ngày/i.test(type), buoi: d._buoi || d.buoi || d['Buổi'] || 'sang' });
     });
     var ppl = [], seen = {};
@@ -11739,11 +11739,11 @@ if (typeof module !== 'undefined') module.exports = XW;
      ===================================================================== */
   EKEY.DON = 'Số đơn'; ETYPE_T.DON = 'Đơn nghỉ'; STD_FILE.DON = '04_Nghi_phep/Don_nghi_phep_2026.xlsx';
   var NP_TYPES = [['Nghỉ phép năm', 'PN', 'Trừ vào quỹ phép năm (Điều 113)'], ['Nghỉ phép nửa ngày', 'X/2', 'Trừ 0,5 ngày vào quỹ phép năm'], ['Nghỉ việc riêng có lương', 'R', 'Kết hôn 3 ngày; con kết hôn 1 ngày; cha mẹ (cả bên vợ/chồng), vợ/chồng, con chết 3 ngày (Điều 115)'],
-    ['Nghỉ ốm', 'Ô', 'Hưởng chế độ BHXH – cần giấy chứng nhận nghỉ việc hưởng BHXH'], ['Nghỉ thai sản', 'TS', 'Hưởng chế độ BHXH'], ['Nghỉ không lương', 'KL', 'Thỏa thuận với người sử dụng lao động (Điều 115 khoản 3)']];
+    ['Nghỉ ốm', 'Ô', 'Hưởng chế độ BHXH – cần giấy chứng nhận nghỉ việc hưởng BHXH'], ['Nghỉ thai sản', 'TS', 'Hưởng chế độ BHXH'], ['Nghỉ không lương', 'KL', 'Thỏa thuận với người sử dụng lao động (Điều 115 khoản 3)'], ['Công tác', 'CT', 'Không trừ phép năm; tính 1 ngày công và 8 giờ cho mỗi ngày làm việc']];
   function npRule(s) { var L = s.leave || (s.leave = {}); if (L.base == null) L.base = 12; L.emp = L.emp || {}; return L; }
-  function npWorkDays(u, e, from, to) { // số ngày làm việc theo ca của người đó trong khoảng
+  function npWorkDays(u, e, from, to, fullDay) { // số ngày làm việc theo ca của người đó trong khoảng
     var s = ccOf(u), sh = ccShiftOf(s, e ? e['Phòng ban'] : '', e ? e['Mã NV'] : ''), n = 0, d = from, g = 0;
-    while (d <= to && g < 400) { var K = bcKind(s, sh, d); n += K.k === 'work' ? 1 : K.k === 'half' ? 0.5 : 0; d = ccAdd(d, 1); g++; }
+    while (d <= to && g < 400) { var K = bcKind(s, sh, d); n += K.k === 'work' || (fullDay && K.k === 'half') ? 1 : K.k === 'half' ? 0.5 : 0; d = ccAdd(d, 1); g++; }
     return n;
   }
   function npRound(v) { var f = Math.floor(v); return v - f >= 0.5 ? f + 1 : f; }
@@ -11817,8 +11817,10 @@ if (typeof module !== 'undefined') module.exports = XW;
     var m = modal('Từ chối đơn ' + so, 'Lý do gửi về app cho nhân viên', '<div class="field"><label for="xmLy">Lý do từ chối</label><textarea class="input" id="xmLy" rows="3" maxlength="300"></textarea></div>' + bcWho() + '<div class="link-row" style="justify-content:flex-end;margin-top:12px"><button class="btn" data-close>Đóng</button><button class="btn btn-primary" id="xmNoGo">Từ chối đơn</button></div>');
     $('#xmNoGo', m).addEventListener('click', function () { var ly = $('#xmLy', m).value.trim(); if (!ly) { toast('Ghi lý do để nhân viên biết', 'err'); $('#xmLy', m).focus(); return; } m.close(); xmDecide(u, so, false, ly); render(); }); };
   function xmFind(key) { var a = key.split('|'), u = unitById(a[0]), so = a.slice(1).join('|'); if (!u) return null; var x = xmList(u).filter(function (q) { return String(q.so) === so; })[0]; return x ? { u: u, x: x } : null; }
-  ACTS['xm-view'] = function (a, key) { var F = xmFind(key); if (!F) return; var x = F.x, e = nvIndex(F.u)[x.ma] || {}, trip = x.kieu === 'cong_sang' || x.kieu === 'cong_chieu';
+  ACTS['xm-view'] = function (a, key) { var F = xmFind(key); if (!F) return; var x = F.x, e = nvIndex(F.u)[x.ma] || {}, trip = ['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'].indexOf(String(x.kieu || '').toLowerCase()) >= 0 || /công tác/i.test(String(x.kieu || ''));
     var body = '<dl class="kv2"><dt>Nhân sự</dt><dd>' + esc(e['Họ và tên'] || x.ma) + ' · ' + esc(x.ma) + '</dd><dt>Loại đơn</dt><dd>' + esc(xmTypeText(x.kieu)) + '</dd><dt>Ngày</dt><dd>' + HR.vnDate(x.ngay) + '</dd>' + (!trip ? '<dt>' + (x.kieu === 'muon' ? 'Giờ dự kiến đến' : 'Giờ dự kiến về') + '</dt><dd>' + esc(x.gio || '') + (x.phut ? ' · ' + x.phut + ' phút' : '') + '</dd>' : '') + '<dt>Trạng thái</dt><dd>' + npApprovalBadge(F.u, x) + '</dd><dt>' + (npPending(x) ? 'Cấp đang duyệt' : 'Người duyệt') + '</dt><dd>' + esc(npApproval(F.u, x).chain[npApproval(F.u, x).currentStep - 1] && npApproval(F.u, x).chain[npApproval(F.u, x).currentStep - 1].approverName || x.nguoi_duyet || '') + '</dd>' + (x.ngay_duyet ? '<dt>Ngày duyệt</dt><dd>' + HR.vnDate(x.ngay_duyet) + '</dd>' : '') + (x.ly_do ? '<dt>Lý do</dt><dd>' + esc(x.ly_do) + '</dd>' : '') + (x.ly_do_tc ? '<dt>Lý do từ chối</dt><dd>' + esc(x.ly_do_tc) + '</dd>' : '') + '</dl>' + npApprovalTrail(F.u, x) + '<h3 style="font-size:14px;margin:14px 0 4px">Ảnh đính kèm</h3>' + reqPhotosHtml(x.anh);
+    if (trip && x.trang_thai === 'Đã duyệt') { var ci = x.checkin && typeof x.checkin === 'object' ? x.checkin : null, lat = ci ? Number(ci.lat) : NaN, lng = ci ? Number(ci.lng) : NaN, at = ci && ci.checkedInAt ? new Date(ci.checkedInAt) : null, atText = at && !isNaN(at.getTime()) ? at.toLocaleString('vi-VN') : ci && ci.checkedInAt || '', map = ci && isFinite(lat) && isFinite(lng) ? 'https://www.google.com/maps?q=' + lat + ',' + lng : '';
+      body += '<div class="notice" style="margin-top:12px"><div><b>Check-in định vị công tác</b>' + (ci ? '<p style="margin:6px 0"><b>' + esc(ci.address || (isFinite(lat) && isFinite(lng) ? lat.toFixed(6) + ', ' + lng.toFixed(6) : 'Tọa độ không hợp lệ')) + '</b></p><small>Thời gian: ' + esc(atText) + (ci.accuracy ? ' · Sai số GPS khoảng ' + esc(String(Math.round(+ci.accuracy))) + ' m' : '') + (ci.checkedInBy ? ' · Người check-in: ' + esc(ci.checkedInBy) : '') + '</small>' + (map ? '<p style="margin:8px 0 0"><a href="' + esc(map) + '" target="_blank" rel="noopener">Xem trên Google Maps</a></p>' : '') : '<p class="faint" style="margin:6px 0 0">Chưa có thông tin check-in vị trí.</p>') + '</div></div>'; }
     var m = modal('Đơn ' + xmTypeText(x.kieu), 'Mã ' + x.so, body + '<div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Đóng</button></div>', true); reqPhotoBind(m);
   };
   ACTS['xm-edit'] = function (a, key) { var F = xmFind(key); if (!F || !pqAct('np')) return; var u = F.u, x = F.x, trip = x.kieu === 'cong_sang' || x.kieu === 'cong_chieu';
@@ -11906,7 +11908,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     $('#npEditForm', m).addEventListener('submit', function (ev) { ev.preventDefault(); var half = $('#neType', m).value === 'Nghỉ phép nửa ngày', from = HR.parseVn($('#neFrom', m).value.trim()) || '', to = half ? from : HR.parseVn($('#neTo', m).value.trim()) || from, msg = $('#neMsg', m), e = nvIndex(F.u)[d['Mã NV']];
       if (!from || !to || to < from || (half && !['sang', 'chieu'].includes($('#neHalf', m).value))) { msg.textContent = 'Chọn ngày nghỉ hợp lệ.'; return; }
       var duplicate = (F.u.data.DON || []).filter(function (x) { return x['Số đơn'] !== d['Số đơn'] && x['Mã NV'] === d['Mã NV'] && x['Trạng thái'] !== 'Từ chối' && String(x['Từ ngày']).slice(0, 10) <= to && String(x['Đến ngày'] || x['Từ ngày']).slice(0, 10) >= from; })[0]; if (duplicate) { msg.textContent = 'Trùng với đơn ' + duplicate['Số đơn'] + '.'; return; }
-      var n = half ? 0.5 : npWorkDays(F.u, e, from, to), patch = { 'Loại nghỉ': $('#neType', m).value, 'Từ ngày': from, 'Đến ngày': to, 'Số ngày': n, 'Buổi': half ? $('#neHalf', m).value : '', '_buoi': half ? $('#neHalf', m).value : '', '_lydo': $('#neWhy', m).value.trim(), 'Lý do': $('#neWhy', m).value.trim() }, updated = Object.assign({}, d, patch);
+      var n = half ? 0.5 : npWorkDays(F.u, e, from, to, $('#neType', m).value === 'Công tác'), patch = { 'Loại nghỉ': $('#neType', m).value, 'Từ ngày': from, 'Đến ngày': to, 'Số ngày': n, 'Buổi': half ? $('#neHalf', m).value : '', '_buoi': half ? $('#neHalf', m).value : '', '_lydo': $('#neWhy', m).value.trim(), 'Lý do': $('#neWhy', m).value.trim() }, updated = Object.assign({}, d, patch);
       wfAdminDon(F.u, updated, false).then(function () { editRow(F.u, 'DON', d['Số đơn'], patch, 'sửa đơn nghỉ ' + d['Số đơn'] + ' bởi ' + ccUser()); commitEdits(); m.close(); wfRefreshRequest(F.u, [d, updated], true).catch(function (er) { toast('Đơn đã sửa, chưa đồng bộ lại công', 'err', er.message); }); toast('Đã sửa đơn nghỉ', 'ok', 'Quỹ phép năm, số ngày chờ duyệt và Tổng hợp công được tính lại.'); }, function (er) { msg.textContent = 'Chưa cập nhật được đơn trên máy chủ: ' + er.message; });
     });
   };
@@ -11938,7 +11940,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       var approval = npApproval(x.u, { 'Mã NV': x.e['Mã NV'] }); approvalBox.innerHTML = approval.chain.length ? '<b>' + approval.chain.map(function (v, i) { return 'Cấp ' + (i + 1) + ': ' + esc(v.approverName || v.approverId); }).join(' → ') + '</b><small style="display:block;margin-top:4px">Duyệt tuần tự theo từng cấp; cấp duyệt cuối duyệt thì đơn mới hoàn tất</small>' : '<span class="down">Chưa cấu hình chuỗi duyệt cho nhân sự này</span>';
       if (!a) { box.innerHTML = '<span class="faint">Chọn nhân sự và ngày nghỉ</span>'; return null; }
       if (b < a) { box.innerHTML = '<span class="down">Đến ngày phải sau Từ ngày</span>'; return null; }
-      var n = half ? 0.5 : npWorkDays(x.u, x.e, a, b), h = '<span>Số ngày làm việc nghỉ: <b>' + nfmt(n) + '</b></span>' + (half ? '<span class="faint">Nghỉ buổi ' + ($('#nHalf', m).value === 'sang' ? 'sáng' : 'chiều') + '</span>' : '<span class="faint">(đã trừ ngày nghỉ tuần, lễ tết theo ca của người này)</span>');
+      var trip = $('#nType', m).value === 'Công tác', n = half ? 0.5 : npWorkDays(x.u, x.e, a, b, trip), h = '<span>' + (trip ? 'Số ngày công tác' : 'Số ngày làm việc nghỉ') + ': <b>' + nfmt(n) + '</b></span>' + (half ? '<span class="faint">Nghỉ buổi ' + ($('#nHalf', m).value === 'sang' ? 'sáng' : 'chiều') + '</span>' : '<span class="faint">(đã trừ ngày nghỉ tuần, lễ tết theo ca của người này)</span>');
       if (/phép năm|phép nửa ngày/.test($('#nType', m).value)) { var q = npQuota(x.u, x.e, R); h += '<div class="notice' + (q.left - n < 0 ? ' warn' : '') + '">' + ic('np') + '<div>Phép năm còn <b>' + nfmt(q.left) + '</b> → sau đơn này còn <b>' + nfmt(q.left - n) + '</b>' + (q.left - n < 0 ? ' – vượt quỹ phép, phần vượt nên chuyển sang nghỉ không lương' : '') + '</div></div>'; }
       var dup = (x.u.data.DON || []).filter(function (d) { return d['Mã NV'] === x.e['Mã NV'] && d['Trạng thái'] !== 'Từ chối' && String(d['Từ ngày']).slice(0, 10) <= b && String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10) >= a; })[0];
       if (dup) h += '<div class="notice warn">' + ic('info') + '<div>Trùng đơn ' + esc(dup['Số đơn']) + ' (' + esc(dup['Loại nghỉ']) + ', ' + esc(dup['Trạng thái']) + ')</div></div>';
@@ -12666,7 +12668,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     }
     return out;
   }
-  function lcDons(u) { var o = {}; (u.data.DON || []).forEach(function (d) { if (d['Trạng thái'] !== 'Đã duyệt' || !d['Từ ngày']) return; var t = String(d['Loại nghỉ'] || ''), code = /^đi công tác$/i.test(t) ? 'CT' : 'PN'; BC_LEAVE.some(function (b) { if (b[0].test(t)) { code = b[1]; return true; } }); (o[d['Mã NV']] = o[d['Mã NV']] || []).push({ a: String(d['Từ ngày']).slice(0, 10), b: String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10), code: code, t: t }); }); return o; }
+  function lcDons(u) { var o = {}; (u.data.DON || []).forEach(function (d) { if (d['Trạng thái'] !== 'Đã duyệt' || !d['Từ ngày']) return; var t = String(d['Loại nghỉ'] || ''), code = /công tác/i.test(t) ? 'CT' : 'PN'; BC_LEAVE.some(function (b) { if (b[0].test(t)) { code = b[1]; return true; } }); (o[d['Mã NV']] = o[d['Mã NV']] || []).push({ a: String(d['Từ ngày']).slice(0, 10), b: String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10), code: code, t: t }); }); return o; }
 
   // 11/11 11:16 anh: thiết lập cách thức xếp ca tách sang tab Thiết lập ca
   function lcCfgCard(u) {

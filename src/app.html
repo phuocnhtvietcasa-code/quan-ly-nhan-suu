@@ -926,6 +926,19 @@ function compressRequestPhotos(files, already) {
   }); })).then(function (out) { if (out.reduce(function (n, x) { return n + x.length; }, 0) > 1500000) throw new Error('Tổng dung lượng ảnh sau khi nén quá lớn. Chọn ít ảnh hơn.'); return out; });
 }
 function requestPhotoHtml(photos) { var a = Array.isArray(photos) ? photos : []; return a.length ? '<div class="req-photos">' + a.map(function (src, i) { return '<img data-request-photo="' + i + '" src="' + esc(src) + '" alt="Ảnh đính kèm ' + (i + 1) + '">'; }).join('') + '</div>' : '<p class="faint">Chưa có ảnh đính kèm.</p>'; }
+function requestCheckinDate(value) { var d = new Date(value); return !isNaN(d.getTime()) ? d.toLocaleString('vi-VN') : String(value || ''); }
+function requestCheckinHtml(checkin, editable) {
+  var c = checkin && typeof checkin === 'object' ? checkin : null, lat = c ? Number(c.lat) : NaN, lng = c ? Number(c.lng) : NaN, valid = isFinite(lat) && isFinite(lng), map = valid ? 'https://www.google.com/maps?q=' + lat + ',' + lng : '';
+  return '<section class="nvx-card" style="margin-top:12px;padding:12px"><h3 style="font-size:14px;margin:0 0 8px">Check-in định vị công tác</h3>' + (c ? '<p style="margin:0 0 5px"><b>' + esc(c.address || (valid ? lat.toFixed(6) + ', ' + lng.toFixed(6) : '')) + '</b></p><small class="faint">Thời gian: ' + esc(requestCheckinDate(c.checkedInAt)) + (c.accuracy ? ' · Sai số GPS khoảng ' + esc(String(Math.round(+c.accuracy))) + ' m' : '') + (c.checkedInBy ? ' · Người check-in: ' + esc(c.checkedInBy) : '') + '</small>' + (map ? '<p style="margin:8px 0 0"><a class="btn" href="' + esc(map) + '" target="_blank" rel="noopener">Xem trên Google Maps</a></p>' : '') : '<p class="faint" style="margin:0 0 8px">Chưa có thông tin check-in vị trí.</p>') + (editable ? '<button type="button" class="btn pri full" id="req-checkin">' + (c ? 'Check-in lại vị trí' : 'Check-in vị trí') + '</button><div id="req-checkin-result" aria-live="polite"></div>' : '') + '</section>';
+}
+function reverseGeocodeAddress(lat, lng) {
+  var fallback = lat.toFixed(6) + ', ' + lng.toFixed(6), controller = typeof AbortController === 'function' ? new AbortController() : null, timer = controller ? setTimeout(function () { controller.abort(); }, 7000) : null;
+  return fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' + encodeURIComponent(lat) + '&lon=' + encodeURIComponent(lng) + '&accept-language=vi', controller ? { signal: controller.signal } : {}).then(function (res) { if (!res.ok) throw new Error('Không tra được địa chỉ'); return res.json(); }).then(function (j) {
+    var a = j && j.address || {}, street = [a.house_number, a.road || a.pedestrian || a.residential || a.path || a.footway].filter(Boolean).join(' '), ward = a.quarter || a.neighbourhood || a.suburb || a.village || a.hamlet, district = a.city_district || a.district || a.county, city = a.city || a.town || a.municipality || a.state_district, province = a.state || a.province, parts = [];
+    [street, ward, district, city, province].forEach(function (v) { if (v && parts.map(function (x) { return x.toLowerCase(); }).indexOf(String(v).toLowerCase()) < 0) parts.push(String(v)); });
+    return street ? parts.join(', ') : fallback;
+  }).catch(function () { return fallback; }).then(function (address) { if (timer) clearTimeout(timer); return address; });
+}
 function approvalChainOf(r) { var a = r && r.approval || {}, chain = r && (r.approvalChain || a.chain) || []; return (Array.isArray(chain) ? chain : []).map(function (x) { return { approverId: String(x.approverId || x.ma || x.id || ''), approverName: String(x.approverName || x.ten || x.name || x.approverId || x.ma || '') }; }).filter(function (x) { return x.approverId; }).slice(0, 5); }
 function isRequestPending(r) { return !!r && ['Chờ duyệt', 'Đang chờ duyệt'].indexOf(r.trang_thai) >= 0; }
 function approvalBadge(r) { var pending = isRequestPending(r); if (!pending) return esc(r && r.trang_thai || ''); var step = +(r.currentStep || (r.approval || {}).currentStep || 0), total = +(r.totalSteps || (r.approval || {}).totalSteps || 0); return total ? 'Đang chờ duyệt (Cấp ' + step + '/' + total + ')' : 'Đang chờ duyệt'; }
@@ -2066,10 +2079,10 @@ function nvBind(st, X) {
   }
   function openRequest(kind, so, group) {
     var r = requestFind(kind, so, group); if (!r) return;
-    var isXm = kind === 'xm' || r.xm, k = r.kieu || '', trip = isXm && (k === 'cong_sang' || k === 'cong_chieu'), own = group === 'own', title = isXm ? 'Đơn đi muộn, về sớm, công tác ' + r.so : 'Đơn nghỉ ' + r.so;
+    var isXm = kind === 'xm' || r.xm, k = String(r.kieu || ''), trip = isXm && (['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'].indexOf(k.toLowerCase()) >= 0 || /công tác/i.test(k)), own = group === 'own', title = isXm ? 'Đơn đi muộn, về sớm, công tác ' + r.so : 'Đơn nghỉ ' + r.so;
     var h = '<dl class="kv2 nvx-dd">';
     if (isXm) {
-      var name = k === 'muon' ? 'Đi muộn' : k === 'som' ? 'Về sớm' : k === 'cong_sang' ? 'Công tác sáng' : 'Công tác chiều';
+      var name = ({ muon: 'Đi muộn', som: 'Về sớm', cong_sang: 'Công tác sáng', cong_chieu: 'Công tác chiều', di_cong_tac: 'Đi công tác', cong_tac: 'Đi công tác', di_cong: 'Đi công tác', cong: 'Công tác cả ngày' })[k.toLowerCase()] || (/công tác/i.test(k) ? k : 'Đi muộn, về sớm, công tác');
       h += '<dt>Loại đơn</dt><dd>' + esc(name) + '</dd><dt>Ngày</dt><dd>' + THU[isoDow(r.ngay)] + ', ' + vnD(r.ngay) + '</dd>';
       if (!trip) h += '<dt>' + (k === 'muon' ? 'Dự kiến đến' : 'Dự kiến về') + '</dt><dd>' + esc(r.gio || '') + (r.phut ? '<small class="sub">' + (k === 'muon' ? 'muộn ' : 'sớm ') + r.phut + ' phút</small>' : '') + '</dd>';
     } else {
@@ -2083,9 +2096,22 @@ function nvBind(st, X) {
     if (r.ly_do_tc) h += '<dt>Lý do từ chối</dt><dd class="bad-t">' + esc(r.ly_do_tc) + '</dd>';
     h += '</dl>' + approvalTrailHtml(r) + '<h3 style="font-size:14px;margin:14px 0 4px">Ảnh đính kèm</h3>' + requestPhotoHtml(r.anh);
     if (own && trip && r.trang_thai === 'Đã duyệt') h += '<label class="lbl" for="req-photos-upload">Thêm ảnh công tác</label><input class="req-upload" type="file" id="req-photos-upload" accept="image/*" multiple><small class="faint">Ảnh được thu nhỏ và nén trên thiết bị trước khi gửi.</small><button type="button" class="btn pri full" id="req-upload-send" style="margin-top:8px">Tải ảnh lên</button><div id="req-upload-result"></div>';
+    if (trip && r.trang_thai === 'Đã duyệt') h += requestCheckinHtml(r.checkin, own);
     openSheet(title, '<div class="nvx-form">' + h + '</div>');
     sh.querySelectorAll('[data-request-photo]').forEach(function (img) { img.onclick = function (e) { e.stopPropagation(); requestLightbox(img.src); }; });
     var up = $('#req-upload-send', sh); if (up) up.onclick = function () { var input = $('#req-photos-upload', sh), files = input && input.files; if (!files || !files.length) { $('#req-upload-result', sh).innerHTML = '<div class="msg err">Chọn ảnh cần tải lên.</div>'; return; } up.disabled = true; compressRequestPhotos(files, (r.anh || []).length).then(function (photos) { return api('/api/xin-muon', { so: r.so, tai_anh: 1, anh: photos }); }).then(function (j) { if (!j.ok) { $('#req-upload-result', sh).innerHTML = '<div class="msg err">' + esc(j.loi) + '</div>'; up.disabled = false; return; } closeSheet(); appSilentRefresh(); }).catch(function (e) { $('#req-upload-result', sh).innerHTML = '<div class="msg err">' + esc(e.message || 'Chưa nén được ảnh.') + '</div>'; up.disabled = false; }); };
+    var checkinBtn = $('#req-checkin', sh); if (checkinBtn) checkinBtn.onclick = function () {
+      var result = $('#req-checkin-result', sh), label = r.checkin ? 'Check-in lại vị trí' : 'Check-in vị trí';
+      function fail(message) { if (result) result.innerHTML = '<div class="msg err">' + esc(message) + '</div>'; checkinBtn.disabled = false; checkinBtn.textContent = label; }
+      if (!navigator.geolocation) { fail('Thiết bị hoặc trình duyệt này chưa hỗ trợ lấy vị trí GPS.'); return; }
+      checkinBtn.disabled = true; checkinBtn.textContent = 'Đang lấy tọa độ GPS...'; if (result) result.textContent = 'Đang lấy tọa độ GPS...';
+      try { navigator.geolocation.getCurrentPosition(function (pos) {
+        var lat = Number(pos.coords.latitude), lng = Number(pos.coords.longitude), accuracy = Number(pos.coords.accuracy), checkedInAt = new Date(pos.timestamp || Date.now()).toISOString();
+        reverseGeocodeAddress(lat, lng).then(function (address) { return api('/api/xin-muon', { so: r.so, checkin: { lat: lat, lng: lng, accuracy: accuracy, address: address, checkedInAt: checkedInAt } }); }).then(function (j) { if (!j.ok) throw new Error(j.loi || 'Chưa lưu được thông tin check-in.'); closeSheet(); appSilentRefresh(); }).catch(function (e) { fail(e.message || 'Chưa lưu được vị trí. Kiểm tra kết nối mạng rồi thử lại.'); });
+      }, function (e) {
+        var message = e && e.code === 1 ? 'Bạn chưa cho phép truy cập vị trí. Hãy bật quyền Vị trí cho trình duyệt trong cài đặt điện thoại rồi thử lại.' : e && e.code === 3 ? 'Không lấy được GPS trong thời gian cho phép. Hãy bật GPS, ra nơi thoáng và thử lại.' : 'GPS chưa khả dụng. Hãy bật Dịch vụ vị trí/GPS trên điện thoại rồi thử lại.'; fail(message);
+      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }); } catch (e) { fail('Không thể truy cập GPS. Hãy bật quyền Vị trí cho trình duyệt rồi thử lại.'); }
+    };
   }
   /* 16/11/2026 anh: CHUÔNG THÔNG BÁO – tổng hợp thông báo công ty (mới, chưa đọc, đã đọc), xóa; popup khi mở app */
   var TBL = (st.tb || []).map(function (x) { var ref = x.recordId || x.ref || x.id, type = x.type || (x.loai === 'don' && /^XM-/i.test(String(ref || '')) ? 'xm' : x.loai || 'tb'); x.type = type; x.targetTab = x.targetTab || (type === 'don' || type === 'xm' ? 'don' : type === 'bc' || type === 'vb' ? type : 'tb'); x.recordId = ref; return x; });

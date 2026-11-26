@@ -215,16 +215,16 @@ const VB_PART = 700000, VB_MAX = 10 * 1024 * 1024;
 function tbDen(r) { try { return JSON.parse(r.den || '{}') || {}; } catch (e) { return {}; } }
 function tbHop(r, me, H) { const d = tbDen(r); if (r.cty && H.cty && r.cty !== H.cty) return false; return d.all ? true : Array.isArray(d.ma) && d.ma.length ? d.ma.includes(me) : Array.isArray(d.pb) && d.pb.length ? d.pb.includes(H.pb || '') : false; }
 async function tbNguoiNhan(db, demo, r) { const BY = await hsLite(db, demo); return Object.keys(BY).filter(ma => tbHop(r, ma, BY[ma])); }
-// Giữ nguyên lược đồ D1: metadata buổi nghỉ, ảnh và lịch trực cuối tuần được gói cùng lý do trong cột ly_do.
+// Giữ nguyên lược đồ D1: metadata buổi nghỉ, ảnh, check-in định vị và lịch trực cuối tuần được gói cùng lý do trong cột ly_do.
 const REQ_META_PREFIX = '\u001fREQ1:';
 const WEEKEND_DUTY_TYPE = 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7';
 function requestText(raw) {
   const s = String(raw || '');
-  const empty = { ly_do: s, buoi: '', anh: [], ngayTrucCN: '', ngayNghiBuT7: '', approval: null, approvalChain: [], currentStep: 0, totalSteps: 0, currentApproverId: '', approvalHistory: [] };
+  const empty = { ly_do: s, buoi: '', anh: [], ngayTrucCN: '', ngayNghiBuT7: '', checkin: null, approval: null, approvalChain: [], currentStep: 0, totalSteps: 0, currentApproverId: '', approvalHistory: [] };
   if (s.indexOf(REQ_META_PREFIX) !== 0) return empty;
   try {
     const x = JSON.parse(s.slice(REQ_META_PREFIX.length)), a = x.approval && typeof x.approval === 'object' ? x.approval : null;
-    return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [], ngayTrucCN: String(x.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || ''), approval: a, approvalChain: a && Array.isArray(a.chain) ? a.chain : [], currentStep: a ? +a.currentStep || 0 : 0, totalSteps: a ? +a.totalSteps || 0 : 0, currentApproverId: a ? String(a.currentApproverId || '') : '', approvalHistory: a && Array.isArray(a.approvalHistory) ? a.approvalHistory : [] };
+    return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [], ngayTrucCN: String(x.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || ''), checkin: x.checkin && typeof x.checkin === 'object' ? x.checkin : null, approval: a, approvalChain: a && Array.isArray(a.chain) ? a.chain : [], currentStep: a ? +a.currentStep || 0 : 0, totalSteps: a ? +a.totalSteps || 0 : 0, currentApproverId: a ? String(a.currentApproverId || '') : '', approvalHistory: a && Array.isArray(a.approvalHistory) ? a.approvalHistory : [] };
   } catch (e) { return empty; }
 }
 function requestPhotos(value) {
@@ -234,12 +234,13 @@ function requestPhotos(value) {
   for (const x of value) { const v = String(x || ''); if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(v) || v.length > 600000) return null; out.push(v); }
   return out;
 }
-function requestTextPack(reason, buoi, photos, dates, approval) {
+function requestTextPack(reason, buoi, photos, dates, approval, checkin) {
   const a = requestPhotos(photos); if (!a) return null;
   const r = String(reason || '').trim().slice(0, 300), b = ['sang', 'chieu'].includes(String(buoi || '')) ? String(buoi) : '';
   const ngayTrucCN = String(dates && dates.ngayTrucCN || ''), ngayNghiBuT7 = String(dates && dates.ngayNghiBuT7 || '');
-  if (!b && !a.length && !ngayTrucCN && !ngayNghiBuT7 && !approval) return r;
-  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a, ngayTrucCN, ngayNghiBuT7, ...(approval ? { approval } : {}) }); return packed.length <= 1700000 ? packed : null;
+  const ci = checkin && typeof checkin === 'object' ? checkin : null;
+  if (!b && !a.length && !ngayTrucCN && !ngayNghiBuT7 && !approval && !ci) return r;
+  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a, ngayTrucCN, ngayNghiBuT7, ...(ci ? { checkin: ci } : {}), ...(approval ? { approval } : {}) }); return packed.length <= 1700000 ? packed : null;
 }
 function activeApprovalChain(by, ma) {
   return nguoiDuyet(by, ma).slice(0, 5).map(id => ({ approverId: id, approverName: by[id].ten || id }));
@@ -309,7 +310,7 @@ async function advanceRequestApproval(db, cfg, origin, req, now, demo, so, actor
   const final = approve && step >= approval.totalSteps;
   let next = { ...approval, approvalHistory: history };
   if (approve && !final) { next.currentStep = step + 1; next.currentApproverId = approval.chain[step].approverId; }
-  const packed = requestTextPack(requestText(row.ly_do).ly_do, requestText(row.ly_do).buoi, requestText(row.ly_do).anh, { ngayTrucCN: requestText(row.ly_do).ngayTrucCN, ngayNghiBuT7: requestText(row.ly_do).ngayNghiBuT7 }, next);
+  const oldMeta = requestText(row.ly_do), packed = requestTextPack(oldMeta.ly_do, oldMeta.buoi, oldMeta.anh, { ngayTrucCN: oldMeta.ngayTrucCN, ngayNghiBuT7: oldMeta.ngayNghiBuT7 }, next, oldMeta.checkin);
   const status = !approve ? 'Từ chối' : final ? 'Đã duyệt' : 'Đang chờ duyệt';
   const nguoi = history.map(x => x.approverName).join(', ').slice(0, 80), at = approve && !final ? null : isoVN(now), lyDo = approve ? null : String(reason || '').slice(0, 300);
   const target = approve && !final ? next.currentApproverId : '';
@@ -1243,12 +1244,12 @@ async function api(req, env, url) {
         const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o || !demoFind(o.ma)) continue;
         if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
-          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
+          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
           const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
           if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
           if (loai === WEEKEND_DUTY_TYPE && (!weekendDutyDates({ ly_do: requestTextPack('', '', [], dates) }) || tu !== dates.ngayNghiBuT7 || den !== dates.ngayTrucCN)) continue;
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
-          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh, dates, old.approval); if (packed == null) continue;
+          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh, dates, old.approval, old.checkin); if (packed == null) continue;
           const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
           mark(o.tu, o.den); mark(tu, den);
           st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
@@ -1272,7 +1273,7 @@ async function api(req, env, url) {
         const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o || !demoFind(o.ma)) continue;
         if (x.xoa) { mark(o.ngay); st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
         if (x.sua) {
-          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh, null, old.approval);
+          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh, null, old.approval, old.checkin);
           const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
           if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
           mark(o.ngay); mark(ngay);
@@ -1465,7 +1466,7 @@ async function api(req, env, url) {
         const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o) continue;
         if (x.xoa) { mark(o.ngay); st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
         if (x.sua) {
-          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh, null, old.approval);
+          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh, null, old.approval, old.checkin);
           const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
           if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
           mark(o.ngay); mark(ngay);
@@ -1487,12 +1488,12 @@ async function api(req, env, url) {
         const so = String(x.so || ''), o = await db.prepare("SELECT * FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so).first(); if (!o) continue;
         if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
-          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
+          const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
           const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
           if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
           if (loai === WEEKEND_DUTY_TYPE && (!weekendDutyDates({ ly_do: requestTextPack('', '', [], dates) }) || tu !== dates.ngayNghiBuT7 || den !== dates.ngayTrucCN)) continue;
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
-          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh, dates, old.approval); if (packed == null) continue;
+          const packed = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, buoi, anh, dates, old.approval, old.checkin); if (packed == null) continue;
           const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : (x.so_ngay == null ? o.so_ngay : Math.max(0, Number(x.so_ngay) || 0));
           mark(o.tu, o.den); mark(tu, den);
           st.push(db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = COALESCE(?, ban_giao), cap_nhat = ? WHERE so = ? AND nguon = 'Điện thoại'").bind(loai, tu, den, n, packed, x.ban_giao == null ? null : String(x.ban_giao).slice(0, 160), now, so)); continue;
@@ -1760,11 +1761,20 @@ async function api(req, env, url) {
   if (p === '/api/xin-muon' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
     if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
-    if (body.so && body.tai_anh) {
+    if (body.so && (body.tai_anh || body.checkin)) {
       const x = await db.prepare('SELECT so, kieu, trang_thai, ly_do FROM xin_muon WHERE so = ? AND ma = ?').bind(String(body.so), s.nv.ma).first();
-      if (!x || !['cong_sang', 'cong_chieu'].includes(x.kieu) || x.trang_thai !== 'Đã duyệt') return bad('Chỉ thêm ảnh cho đơn công tác đã duyệt của chính bạn.');
-      const old = requestText(x.ly_do), add = requestPhotos(body.anh); if (!add || !add.length || old.anh.length + add.length > 5) return bad('Chọn tối đa 5 ảnh JPEG đã nén cho mỗi đơn.');
-      const packed = requestTextPack(old.ly_do, '', old.anh.concat(add), null, old.approval); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh, mỗi ảnh không quá 600 KB.');
+      const tripTypes = ['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'];
+      if (!x || (!tripTypes.includes(String(x.kieu || '').toLowerCase()) && !/công tác/i.test(String(x.kieu || ''))) || x.trang_thai !== 'Đã duyệt') return bad('Chỉ cập nhật check-in hoặc ảnh cho đơn công tác đã duyệt của chính bạn.');
+      const old = requestText(x.ly_do);
+      if (body.checkin) {
+        const c = body.checkin, lat = Number(c.lat), lng = Number(c.lng), accuracy = Number(c.accuracy), at = Date.parse(String(c.checkedInAt || ''));
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180 || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 1000000 || !Number.isFinite(at)) return bad('Tọa độ GPS hoặc thời gian check-in không hợp lệ.');
+        const checkin = { lat, lng, accuracy, address: String(c.address || '').trim().slice(0, 300) || lat.toFixed(6) + ', ' + lng.toFixed(6), checkedInAt: new Date(at).toISOString(), checkedInBy: s.nv.ma };
+        const packed = requestTextPack(old.ly_do, '', old.anh, null, old.approval, checkin); if (packed == null) return bad('Không lưu được thông tin check-in.');
+        await db.prepare('UPDATE xin_muon SET ly_do = ?, cap_nhat = ? WHERE so = ? AND ma = ?').bind(packed, now, x.so, s.nv.ma).run(); return json({ ok: true });
+      }
+      const add = requestPhotos(body.anh); if (!add || !add.length || old.anh.length + add.length > 5) return bad('Chọn tối đa 5 ảnh JPEG đã nén cho mỗi đơn.');
+      const packed = requestTextPack(old.ly_do, '', old.anh.concat(add), null, old.approval, old.checkin); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh, mỗi ảnh không quá 600 KB.');
       await db.prepare('UPDATE xin_muon SET ly_do = ?, cap_nhat = ? WHERE so = ? AND ma = ?').bind(packed, now, x.so, s.nv.ma).run(); return json({ ok: true });
     }
     const HS = await hsOf(db, s.nv.ma, demo), X = xmCfgOf(HS, demo); if (!X.on) return bad('Công ty chưa dùng đơn đi muộn, về sớm, công tác.');
@@ -2314,7 +2324,7 @@ function brJs(c) { return JSON.stringify({ name: c.br_ten || '', logo: c.br_logo
 function htmlEsc(s) { return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch])); }
 const MANIFEST = JSON.stringify({ name: 'HRM-VCS', short_name: 'HRM-VCS', start_url: '/', scope: '/', display: 'standalone', background_color: '#FFFFFF', theme_color: '#2F7D4F', icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon.png', sizes: '512x512', type: 'image/png' }] });
 function b64ToBytes(b64) { const s = atob(b64), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
-const SEC = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'permissions-policy': 'camera=(), microphone=(), geolocation=()' };
+const SEC = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'permissions-policy': 'camera=(), microphone=(), geolocation=(self)' };
 
 export default {
   async scheduled(ev, env, ctx) { ctx.waitUntil(bcCron(env).catch(e => console.error('bcCron', e))); }, // 16/11: gửi báo cáo định kỳ (cron 15 phút/lần – wrangler.jsonc triggers)
