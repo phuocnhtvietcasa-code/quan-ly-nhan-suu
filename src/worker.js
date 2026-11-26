@@ -1990,7 +1990,7 @@ async function api(req, env, url) {
   if (p === '/api/don' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
     if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
-    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', WEEKEND_DUTY_TYPE];
+    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE];
     const loai = LOAI.includes(body.loai) ? body.loai : null, ly = String(body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi || ''), anh = requestPhotos(body.anh);
     let tu = String(body.tu || ''), den = String(body.den || body.tu || ''), weekendDates = null;
     if (!loai) return bad('Chọn loại nghỉ.');
