@@ -4137,15 +4137,17 @@ if (typeof module !== 'undefined') module.exports = XW;
   function shortUnit(n) { return String(n || '').replace(/\s*\(dữ liệu mẫu\)\s*$/i, '').replace(/^Công ty\s+(TNHH|CP|Cổ phần)\s+/i, ''); }
   function unitOrder() { return S.units.slice(); }
   function saveSettings() { return pqSave('settings', function () { return dbSet('settings', S.settings).catch(function (e) { logErr('Lưu cài đặt', e); }); }); } // 0.7.1: pqSave chặn lưu khi tài khoản chỉ có quyền xem (phanquyen.js)
-  function saveUnits() {
-    if (typeof wfAutoMark === 'function') wfAutoMark(); // 18/11 1.0.2: có thay đổi → tự đồng bộ máy chủ chấm công, app nhân viên
-    return pqSave('units', function () { // 0.7.1: pqMerge ghép lại các công ty đang ẩn với tài khoản bị giới hạn theo công ty
-    var clean = pqMerge(S.units).map(function (u) { var o = {}; Object.keys(u).forEach(function (k) { if (k.charAt(0) !== '_') o[k] = u[k]; }); return o; });
-    return dbSet('units', clean).catch(function (e) {
-      logErr('Lưu dữ liệu vào trình duyệt', e);
-      toast('Chưa lưu được dữ liệu vào trình duyệt', 'err', 'Phần mềm vẫn dùng được trong lần mở này; lần sau mở lại sẽ phải chọn lại thư mục. ' + SUPPORT_MSG);
-    });
-    });
+  function saveUnits(remote) {
+    if (!remote && typeof wfAutoMark === 'function') wfAutoMark(true); // chỉ thao tác cục bộ đánh dấu cần đồng bộ
+    var persist = function () { // 0.7.1: pqMerge ghép lại các công ty đang ẩn với tài khoản bị giới hạn theo công ty
+      var clean = pqMerge(S.units).map(function (u) { var o = {}; Object.keys(u).forEach(function (k) { if (k.charAt(0) !== '_') o[k] = u[k]; }); return o; });
+      var write = remote && typeof SV !== 'undefined' && SV && SV.me && typeof svRaw === 'function' ? svRaw('units', clean) : dbSet('units', clean);
+      return write.catch(function (e) {
+        logErr('Lưu dữ liệu vào trình duyệt', e);
+        toast('Chưa lưu được dữ liệu vào trình duyệt', 'err', 'Phần mềm vẫn dùng được trong lần mở này; lần sau mở lại sẽ phải chọn lại thư mục. ' + SUPPORT_MSG);
+      });
+    };
+    return remote ? persist() : pqSave('units', persist);
   }
 
   /* ---------------- Bản chính thức – khởi tạo lần đầu (16/11/2026, 1.0.0) ----------------
@@ -11239,17 +11241,16 @@ if (typeof module !== 'undefined') module.exports = XW;
   function wfCalcPull(u, ym, demo, fileOnly) {
     var first = ym + '-01', last = bcDays(ym).slice(-1)[0], w = u.wf = u.wf || {}, nv = nvIndex(u), call = demo ? wfDemoGet : function (p, b) { return wfCall(u, p, b); };
     return Promise.all([fileOnly ? Promise.resolve({ list: [] }) : call('cham?tu=' + first + '&den=' + last), call('don?tu=' + first), call('xin-muon?tu=' + first)]).then(function (rs) {
-      if (!fileOnly) { w.punches = w.punches || {}; w.punches[ym] = rs[0].list.filter(function (x) { return !!nv[String(x.ma).toUpperCase()] && wfIso(x.t).slice(0, 7) === ym; }); }
-      var remote = {}, local = {}; rs[1].list.filter(function (x) { return nv[x.ma] && x.tu <= last && x.den >= first; }).forEach(function (x) { remote[x.so] = x; });
+      if (!fileOnly) { w.punches = w.punches || {}; var punchList = Array.isArray(rs[0] && rs[0].list) ? rs[0].list : []; w.punches[ym] = wfMergePunches(w.punches[ym], punchList.filter(function (x) { return !!nv[String(x.ma).toUpperCase()] && wfIso(x.t).slice(0, 7) === ym; })); }
+      var remote = {}, local = {}, remoteDon = Array.isArray(rs[1] && rs[1].list) ? rs[1].list : []; remoteDon.filter(function (x) { return nv[x.ma] && x.tu <= last && x.den >= first; }).forEach(function (x) { remote[x.so] = x; });
       (u.data.DON || []).forEach(function (d) { if (d['Nguồn'] === 'Điện thoại' && String(d['Đến ngày'] || d['Từ ngày'] || '') >= first && String(d['Từ ngày'] || '') <= last) local[d['Số đơn']] = d; });
       Object.keys(remote).forEach(function (so) {
         var x = remote[so], d = local[so], e = nv[x.ma] || {}, n = wfDonFromApp(u, x, e);
         if (!d) editRow(u, 'DON', so, n, 'nhận đơn ' + so + ' khi tính công tháng ' + HR.ymLabel(ym));
         else if (wfDonChanged(d, n)) editRow(u, 'DON', so, { 'Loại nghỉ': n['Loại nghỉ'], 'Từ ngày': n['Từ ngày'], 'Đến ngày': n['Đến ngày'], 'Số ngày': n['Số ngày'], _ngayTrucCN: n._ngayTrucCN, _ngayNghiBuT7: n._ngayNghiBuT7, 'Buổi': n['Buổi'], _buoi: n._buoi, _lydo: n._lydo, _anh: n._anh, 'Lý do': n['Lý do'], 'Người duyệt': n['Người duyệt'], 'Ngày duyệt': n['Ngày duyệt'], 'Trạng thái': n['Trạng thái'], 'Lý do từ chối': n['Lý do từ chối'] }, 'cập nhật đơn ' + so + ' khi tính công tháng ' + HR.ymLabel(ym));
       });
-      Object.keys(local).forEach(function (so) { if (!remote[so]) delRow(u, 'DON', so, 'xóa đơn ' + so + ' đã bị xóa trên máy chủ'); });
       return xmPull(u, call, 'xin-muon?tu=' + first);
-    }).then(function () { bcX(u).v++; u._bc = {}; u._ccd = null; ACACHE.key = null; saveUnits(); });
+    }).then(function () { bcX(u).v++; u._bc = {}; u._ccd = null; ACACHE.key = null; saveUnits(true); });
   }
   function bcCalculateNow(u, ym, sourceMode) {
     var demo = !wfOn(u) && wfDemoOn(u), ready = wfOn(u) || demo ? Promise.resolve() : Promise.reject(new Error('Kết nối máy chủ chấm công để lưu kết quả tính công vào D1.'));
@@ -12022,6 +12023,16 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   function wfIso(t) { var d = new Date(t + 7 * 3600e3); return d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()); }
   function wfHM(t) { var d = new Date(t + 7 * 3600e3); return p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()); }
+  function wfMergePunches(existing, incoming) {
+    var by = {}, order = [];
+    (Array.isArray(existing) ? existing : []).concat(Array.isArray(incoming) ? incoming : []).forEach(function (x) {
+      if (!x || typeof x !== 'object') return;
+      var k = x.id != null && x.id !== '' ? 'id:' + String(x.id) : 'row:' + [x.ma || '', x.t || '', x.loai || '', x.cach || '', x.source || ''].join('|');
+      if (!Object.prototype.hasOwnProperty.call(by, k)) { order.push(k); by[k] = Object.assign({}, x); }
+      else by[k] = Object.assign({}, by[k], x);
+    });
+    return order.map(function (k) { return by[k]; }).sort(function (a, b) { return (+a.t || 0) - (+b.t || 0) || String(a.id || '').localeCompare(String(b.id || '')); });
+  }
   // lượt chấm 1 tháng → giờ vào đầu tiên, giờ ra cuối cùng mỗi người mỗi ngày
   function wfMap(u, ym, sourceMode) {
     var list = (u.wf && u.wf.punches && u.wf.punches[ym]) || [], o = {};
@@ -12055,22 +12066,28 @@ if (typeof module !== 'undefined') module.exports = XW;
   window.ccAppExtra = ccAppExtra;
   function bcSavedKey(u, ym) { return u.id + '|' + ym; }
   function bcSavedSet(u, ym, list, replace) {
-    var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }); cache.rev = (cache.rev || 0) + 1; if (replace) cache.rows = {}; u._bc = {};
-    (list || []).forEach(function (x) { if (x && x.ma) cache.rows[String(x.ma).toUpperCase()] = { du_lieu: x.du_lieu || {} }; });
+    var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }); cache.rev = (cache.rev || 0) + 1; u._bc = {};
+    (list || []).forEach(function (x) { if (!x || !x.ma || !x.du_lieu || typeof x.du_lieu !== 'object' || Array.isArray(x.du_lieu) || !Object.keys(x.du_lieu).length) return; var id = String(x.ma).toUpperCase(); cache.rows[id] = { du_lieu: x.du_lieu }; if (cache.skip) delete cache.skip[id]; });
     if (replace) cache.loaded = true; cache.loading = false; cache.failed = false; return cache;
   }
+  function bcSavedDropPeople(u, ym, ids) {
+    var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }), loaded = !!cache.loaded; cache.skip = cache.skip || {};
+    (ids || []).forEach(function (id) { if (id) cache.skip[String(id).toUpperCase()] = 1; });
+    cache.rev = (cache.rev || 0) + 1; cache.loading = false; cache.loaded = true; cache.failed = false; return loaded;
+  }
+  function bcSavedUnskipPeople(u, ym, ids, reload) { var cache = BC_SAVED[bcSavedKey(u, ym)]; if (!cache) return; if (cache.skip) (ids || []).forEach(function (id) { delete cache.skip[String(id).toUpperCase()]; }); if (reload) { cache.loaded = false; cache.failed = false; bcSavedLoad(u, ym); } }
   function bcSavedLoad(u, ym) {
     if (!u || (!wfOn(u) && !wfDemoOn(u))) return;
     var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }); if (cache.loaded || cache.loading || cache.failed) return;
     cache.loading = true; var rev = cache.rev || 0, call = wfOn(u) ? function () { return wfCall(u, 'cong?ym=' + ym); } : function () { return wfDemoGet('cong?ym=' + ym); };
     call().then(function (j) {
       if ((cache.rev || 0) !== rev) return;
-      bcSavedSet(u, ym, j.list || [], true);
+      bcSavedSet(u, ym, Array.isArray(j.list) ? j.list : [], false); cache.loaded = true;
       if (curPage === 'cc' && bcUnit() === u && (PS.bc || {}).m === ym) render();
     }, function () { if ((cache.rev || 0) === rev) { cache.loading = false; cache.failed = true; } });
   }
   function wfApplySavedCong(u, ym, p, s) {
-    var cache = BC_SAVED[bcSavedKey(u, ym)], row = cache && cache.rows && cache.rows[String(p.id).toUpperCase()]; if (!row) return;
+    var cache = BC_SAVED[bcSavedKey(u, ym)], id = String(p.id).toUpperCase(), row = cache && cache.rows && cache.rows[id]; if (!row || cache.skip && cache.skip[id]) return;
     var d = row.du_lieu || {}, ng = d.ngay || {}, ct = d.ct || {}, keys = Object.keys(ng);
     Object.keys(ct).forEach(function (dd) { if (keys.indexOf(dd) < 0) keys.push(dd); });
     keys.forEach(function (dd) {
@@ -12230,10 +12247,10 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   function wfRefreshRequest(u, rows, leave) {
     if (!wfOn(u) && !wfDemoOn(u)) return Promise.resolve(); var months = {}, add = function (v) { var iso = String(v || '').slice(0, 10); if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) months[iso.slice(0, 7)] = 1; };
-    (rows || []).forEach(function (d) { var a = String(d['Từ ngày'] || d.ngay || '').slice(0, 10), b = String(d['Đến ngày'] || d.den || a).slice(0, 10); add(a); add(b); var cur = a, guard = 0; while (cur && cur <= b && guard++ < 400) { months[cur.slice(0, 7)] = 1; cur = ccAdd(cur, 1); } });
-    var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoGet, jobs = Object.keys(months).sort().map(function (ym) { var X = bcX(u); bcSavedSet(u, ym, [], true); return wfSendCong(u, ym, !X.lock[ym]); });
+    var people = {}; (rows || []).forEach(function (d) { var a = String(d['Từ ngày'] || d.ngay || '').slice(0, 10), b = String(d['Đến ngày'] || d.den || a).slice(0, 10), id = d['Mã NV'] || d.ma; if (id) people[String(id).toUpperCase()] = 1; add(a); add(b); var cur = a, guard = 0; while (cur && cur <= b && guard++ < 400) { months[cur.slice(0, 7)] = 1; cur = ccAdd(cur, 1); } });
+    var ids = Object.keys(people), call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoGet, jobs = Object.keys(months).sort().map(function (ym) { var X = bcX(u), loaded = bcSavedDropPeople(u, ym, ids); return wfSendCong(u, ym, !X.lock[ym]).then(function (n) { bcSavedUnskipPeople(u, ym, ids, !loaded); return n; }, function (er) { bcSavedUnskipPeople(u, ym, ids, !loaded); throw er; }); });
     if (leave && typeof hsAppSync === 'function') jobs.push(hsAppSync(u, call, false));
-    return Promise.all(jobs).then(function () { saveUnits(); if (curPage === 'cc') render(); });
+    return Promise.all(jobs).then(function () { saveUnits(true); if (curPage === 'cc') render(); });
   }
   // ĐỒNG BỘ 1 công ty
   function wfMineIdx(u) { var o = {}; (u.data.NV || []).forEach(function (e) { if (e['Mã NV']) o[String(e['Mã NV']).toUpperCase()] = 1; }); return o; }
@@ -12249,7 +12266,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     u._wfP = wfSync0(u).then(function (r) { if (u.wf) u.wf.atTs = Date.now(); end(); return r; }, function (er) { end(); throw er; });
     return u._wfP;
   }
-  function wfAutoMark() { if (!WF_BUSY) WF_AUTO.dirty = WF_AUTO.dirty || Date.now(); } // gọi từ saveUnits (app.js)
+  function wfAutoMark(force) { if (force || !WF_BUSY) WF_AUTO.dirty = WF_AUTO.dirty || Date.now(); } // gọi từ saveUnits (app.js)
   function wfAutoOk() {
     if (typeof SV !== 'undefined' && SV && !SV.me) return false; // bản máy chủ: chưa đăng nhập
     if (typeof PQ !== 'undefined' && PQ.pv) return false; // đang xem thử vai trò
@@ -12284,8 +12301,8 @@ if (typeof module !== 'undefined') module.exports = XW;
     return wfCall(u, 'ping').then(function (j) { w.ten = j.ten_cty; w.ver = j.ver; w.cheDo = j.che_do; return wfCall(u, 'nhan-vien', { list: wfPeople(u) }); })
       .then(function (j) { res.nv = j.them + j.sua; w.noPin = j.chua_pin || []; return wfCall(u, 'cham?tu=' + from + '&den=' + today); })
       .then(function (j) {
-        var nvM = wfMineIdx(u), by = {}; j.list.forEach(function (x) { if (!nvM[String(x.ma).toUpperCase()]) return; var k = wfIso(x.t).slice(0, 7); (by[k] = by[k] || []).push(x); }); // 17/11: máy chủ dùng chung nhiều công ty – chỉ lấy lượt chấm của nhân viên công ty này
-        w.punches = w.punches || {}; [from.slice(0, 7), ymNow].forEach(function (k) { w.punches[k] = by[k] || []; }); res.cham = j.list.length;
+        var nvM = wfMineIdx(u), by = {}, incoming = Array.isArray(j.list) ? j.list : []; incoming.forEach(function (x) { if (!nvM[String(x.ma).toUpperCase()]) return; var k = wfIso(x.t).slice(0, 7); (by[k] = by[k] || []).push(x); }); // 17/11: máy chủ dùng chung nhiều công ty – chỉ lấy lượt chấm của nhân viên công ty này
+        w.punches = w.punches || {}; [from.slice(0, 7), ymNow].forEach(function (k) { w.punches[k] = wfMergePunches(w.punches[k], by[k]); }); res.cham = incoming.length;
         return wfCall(u, 'don?tu=' + ccAdd(today, -62));
       })
       .then(function (j) {
@@ -12308,7 +12325,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         Object.keys(X.lock).sort().slice(-2).forEach(function (ym) { if (sentMonths[ym] || !X.lock[ym].ts || X.lock[ym].ts < (w.since || 0)) return; if (!w.sent || w.sent[ym] !== X.lock[ym].at) jobs.push(wfSendCong(u, ym, false).then(function (n) { res.cong += n; })); });
         return Promise.all(jobs);
       })
-      .then(function () { var X = bcX(u); return Promise.all(Object.keys(w.sent || {}).filter(function (ym) { return X.lock[ym]; }).map(function (ym) { return wfCall(u, 'cong-xac-nhan?ym=' + ym).then(function (j) { w.cong = w.cong || {}; var o = w.cong[ym] = {}; j.list.forEach(function (x) { o[x.ma] = { xn: x.xn, at: x.xn_at, ph: x.phan_hoi }; }); }); })); })
+      .then(function () { var X = bcX(u); return Promise.all(Object.keys(w.sent || {}).filter(function (ym) { return X.lock[ym]; }).map(function (ym) { return wfCall(u, 'cong-xac-nhan?ym=' + ym).then(function (j) { w.cong = w.cong || {}; var o = w.cong[ym] || (w.cong[ym] = {}); (Array.isArray(j.list) ? j.list : []).forEach(function (x) { o[x.ma] = { xn: x.xn, at: x.xn_at, ph: x.phan_hoi }; }); }); })); })
       .then(function () { return typeof lcAppSync === 'function' ? lcAppSync(u, function (p, b) { return wfCall(u, p, b); }).then(function (r) { if (r) { res.lich = r.lich; res.dk = r.dk; } }) : null; })
       .then(function () { return wfCall(u, 'bao-sai').then(function (j) { res.bs = wfBsSet(u, j.list); }, function () { }); })
       .then(function () { return xmPull(u, function (p, b) { return wfCall(u, p, b); }, 'xin-muon?tu=' + from).then(function (n) { res.xm = n; }, function () { }); }) // 16/11
@@ -12319,8 +12336,8 @@ if (typeof module !== 'undefined') module.exports = XW;
       .then(function () {
         w.at = nowVn(); bcX(u).v++; u._bc = {}; u._ccd = null;
         var t = 'Đồng bộ xong: ' + res.nv + ' nhân viên · ' + res.cham + ' lượt chấm · ' + res.don + ' đơn mới' + (res.xm ? ' · ' + res.xm + ' đơn đi muộn/về sớm mới hoặc đổi trạng thái' : '') + (res.kq ? ' · báo ' + res.kq + ' kết quả duyệt' : '') + ' · gửi công ' + res.cong + ' người'; if (res.lich) t += ' · gửi lịch ' + res.lich + ' ô'; if (res.hs) t += ' · gửi hồ sơ ' + res.hs + ' người'; if (res.file) t += ' · gửi ' + res.file + ' file kho'; if (res.dk) t += ' · nhận ' + res.dk + ' ô đăng ký ca'; if (res.bs) t += ' · ' + res.bs + ' ngày công nhân viên báo sai';
-        wfLog(u, t); saveUnits(); return { res: res, txt: t };
-      }, function (er) { wfLog(u, 'Đồng bộ lỗi: ' + er.message, false); saveUnits(); throw er; });
+        wfLog(u, t); saveUnits(true); return { res: res, txt: t };
+      }, function (er) { wfLog(u, 'Đồng bộ lỗi: ' + er.message, false); saveUnits(true); throw er; });
   }
 
   /* ----- 07/11 17:42: BẢN THỬ – dữ liệu mẫu lấy lượt chấm, đơn nghỉ từ máy chủ bản thử (API công khai /api/demo/*, không cần mã kết nối) ----- */
@@ -12343,11 +12360,11 @@ if (typeof module !== 'undefined') module.exports = XW;
       var res = { cham: 0, don: 0, kq: 0 };
       us.forEach(function (u) {
         var nv = nvIndex(u), w = u.wf = u.wf || {}, by = {}, local = {}, edited = false; w.punches = w.punches || {};
-        var mine = rs[0].list.filter(function (x) { return nv[x.ma]; });
+        var mine = (Array.isArray(rs[0] && rs[0].list) ? rs[0].list : []).filter(function (x) { return nv[x.ma]; });
         mine.forEach(function (x) { var k = wfIso(x.t).slice(0, 7); (by[k] = by[k] || []).push(x); });
-        [from.slice(0, 7), today.slice(0, 7)].forEach(function (k) { w.punches[k] = by[k] || []; }); res.cham += mine.length;
+        [from.slice(0, 7), today.slice(0, 7)].forEach(function (k) { w.punches[k] = wfMergePunches(w.punches[k], by[k]); }); res.cham += mine.length;
         (u.data.DON || []).forEach(function (d) { local[String(d['Số đơn'])] = d; });
-        rs[1].list.forEach(function (x) {
+        (Array.isArray(rs[1] && rs[1].list) ? rs[1].list : []).forEach(function (x) {
           var e = nv[x.ma], d = local[x.so]; if (!e) return;
           if (!d) { editRow(u, 'DON', x.so, wfDonFromApp(u, x, e), 'nhận đơn ' + x.so + ' gửi trên điện thoại (bản thử)'); res.don++; edited = true; }
            else if (npPending(d) && x.trang_thai !== d['Trạng thái']) { var remote = wfDonFromApp(u, x, e); editRow(u, 'DON', x.so, { 'Trạng thái': x.trang_thai, 'Người duyệt': x.nguoi_duyet || '', 'Ngày duyệt': x.ngay_duyet || '', 'Lý do từ chối': x.ly_do_tc || '' }, 'cập nhật cấp duyệt đơn ' + x.so + ' từ máy chủ (bản thử)'); Object.assign(d, remote); edited = true; }
@@ -12357,8 +12374,8 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (edited) ACACHE.key = null;
         w.demoAt = nowVn(); bcX(u).v++; u._bc = {}; u._ccd = null;
       });
-      saveUnits();
-      return Promise.all(us.map(function (u) { return (typeof lcAppSync === 'function' ? lcAppSync(u, wfDemoGet).then(function (r) { if (r) res.dk = (res.dk || 0) + r.dk; }, function () { }) : Promise.resolve()).then(function () { return typeof hsAppSync === 'function' ? hsAppSync(u, wfDemoGet, false).catch(function () { }) : null; }).then(function () { return wfDemoGet('bao-sai').then(function (j) { wfBsSet(u, j.list); bcX(u).v++; u._bc = {}; }, function () { }); }).then(function () { return xmPull(u, wfDemoGet, 'xin-muon').then(function (n) { res.xm = (res.xm || 0) + n; }, function () { }); }).then(function () { return typeof vbAppSync === 'function' ? vbAppSync(u) : null; }).then(function () { return typeof bcdAppSync === 'function' ? bcdAppSync(u) : null; }); })).then(function () { saveUnits(); return res; });
+      saveUnits(true);
+      return Promise.all(us.map(function (u) { return (typeof lcAppSync === 'function' ? lcAppSync(u, wfDemoGet).then(function (r) { if (r) res.dk = (res.dk || 0) + r.dk; }, function () { }) : Promise.resolve()).then(function () { return typeof hsAppSync === 'function' ? hsAppSync(u, wfDemoGet, false).catch(function () { }) : null; }).then(function () { return wfDemoGet('bao-sai').then(function (j) { wfBsSet(u, Array.isArray(j.list) ? j.list : []); bcX(u).v++; u._bc = {}; }, function () { }); }).then(function () { return typeof xmPull === 'function' ? xmPull(u, wfDemoGet, 'xin-muon').then(function (n) { res.xm = (res.xm || 0) + n; }, function () { }) : null; }).then(function () { return typeof vbAppSync === 'function' ? vbAppSync(u) : null; }).then(function () { return typeof bcdAppSync === 'function' ? bcdAppSync(u) : null; }); })).then(function () { saveUnits(true); return res; });
     });
   }
   function wfDemoAuto() { wfDemoPull(false).then(function (r) { if (r && (r.cham || r.don || r.dk || r.xm)) render(); }, function () { }); }
@@ -12367,8 +12384,17 @@ if (typeof module !== 'undefined') module.exports = XW;
     var w = u.wf = u.wf || {}, nv = nvIndex(u);
     return call(path).then(function (j) {
       var Q = w.xmQ = w.xmQ || {}, old = {}, up = [], changed = [], seen = {}, n = 0; (w.xm || []).forEach(function (x) { old[x.so] = x; });
-      var list = (j.list || []).filter(function (x) { return nv[x.ma]; }).map(function (x) { var q = Q[x.so]; if (q && x.trang_thai === 'Chờ duyệt') { up.push(Object.assign({ so: x.so }, q)); return Object.assign({}, x, q); } if (q) delete Q[x.so]; return x; });
-      var from = /(?:\?|&)tu=(\d{4}-\d{2}-\d{2})/.exec(path); if (from) Object.keys(old).forEach(function (so) { if (String(old[so].ngay || '') < from[1] && !list.some(function (x) { return x.so === so; })) list.push(old[so]); });
+      var list = (Array.isArray(j && j.list) ? j.list : []).filter(function (x) { return nv[x.ma]; }).map(function (x) {
+        var row = Object.assign({}, x), o = old[row.so], q;
+        if (o) {
+          if (+o.cap_nhat > (+row.cap_nhat || 0)) row = Object.assign({}, row, o);
+          if ((!Array.isArray(row.anh) || !row.anh.length) && Array.isArray(o.anh) && o.anh.length) row.anh = o.anh;
+          if (!row.checkin && o.checkin) row.checkin = o.checkin;
+          if (['Đã duyệt', 'Từ chối', 'Đã hủy'].indexOf(o.trang_thai) >= 0 && ['Chờ duyệt', 'Đang chờ duyệt'].indexOf(row.trang_thai) >= 0) row = Object.assign({}, row, o);
+        }
+        q = Q[row.so]; if (q && ['Chờ duyệt', 'Đang chờ duyệt'].indexOf(row.trang_thai) >= 0) { up.push(Object.assign({ so: row.so }, q)); return Object.assign({}, row, q); } if (q) delete Q[row.so]; return row;
+      });
+      var remoteIds = {}; list.forEach(function (x) { remoteIds[x.so] = 1; }); Object.keys(old).forEach(function (so) { if (!remoteIds[so]) list.push(old[so]); });
       list.forEach(function (x) { var o = old[x.so], diff = !o || ['ma', 'ngay', 'kieu', 'gio', 'phut', 'trang_thai', 'ly_do', 'ly_do_tc'].some(function (k) { return String(o[k] == null ? '' : o[k]) !== String(x[k] == null ? '' : x[k]); }) || JSON.stringify(o && o.anh || []) !== JSON.stringify(x.anh || []) || JSON.stringify(o && o.checkin || null) !== JSON.stringify(x.checkin || null); seen[x.so] = 1; if (!o || o.trang_thai !== x.trang_thai) n++; if (diff) { if (o) changed.push(o); changed.push(x); } });
       Object.keys(old).forEach(function (so) { if (!seen[so]) changed.push(old[so]); }); w.xm = list; w.xmAt = nowVn();
       if (changed.length) { bcX(u).v++; u._bc = {}; u._ccd = null; }
@@ -12850,7 +12876,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var p1 = w.lichSig === sig ? Promise.resolve(null) : call('lich', pl).then(function (j) { w.lichSig = sig; res.lich = j.n || 0; });
     return p1.then(function () { return call('dk-ca?tu=' + ccAdd(td, -7)); }).then(function (j) {
       var W = lcW(u), n = 0, nvM = nvIndex(u); (j.list || []).forEach(function (x) { if (lcLockKey(u, x.ngay) || !nvM[x.ma]) return; /* 17/11: máy chủ dùng chung – chỉ nhận của công ty này */ var G = W.reg[x.ma] || (W.reg[x.ma] = {}); if (G[x.ngay] !== x.ca) { G[x.ngay] = x.ca; n++; } });
-      if (n) { W.v = (W.v || 0) + 1; lcLog(u, { what: 'Nhận ' + n + ' ô nhân viên đăng ký từ app' }); saveUnits(); } res.dk = n; return res;
+      if (n) { W.v = (W.v || 0) + 1; lcLog(u, { what: 'Nhận ' + n + ' ô nhân viên đăng ký từ app' }); saveUnits(true); } res.dk = n; return res;
     });
   }
   ACTS['lc-ntf'] = function (a, key) {
@@ -20829,7 +20855,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   function vbFid(d) { return d.file ? d.file.kid : d.mau ? 'mau-vbf-' + d.id.slice(7) : ''; }
   function vbCid(d) { return d.anh && d.anh.kid ? d.anh.kid : ''; } // 16/11 12:51: ảnh đại diện tài liệu (riêng với file)
   function vbAt(x) { x = String(x || ''); return /^\d{4}-\d\d-\d\dT/.test(x) ? vbVn(x.slice(0, 10)) + ' ' + x.slice(11, 16) : x; }
-  function vbPush(u, quiet) {
+  function vbPush(u, quiet, remote) {
     var call = vbCall(u); if (!call) return Promise.reject(new Error('Công ty chưa kết nối máy chủ chấm công – kết nối ở Chấm công Wi‑Fi để nhân viên xem được trên app.'));
     var V = vbOf(u), cty = vbCty(u), pub = V.ds.filter(function (d) { return vbTt(d) !== 'Dự thảo' && vbFid(d); });
     var meta = { cty: cty, nhom: V.nhom, ds: V.ds.map(function (d) { return { id: d.id, nhom: d.nhom, ten: d.ten, so: d.so || '', mota: d.mota || '', ngay: d.ngay || '', hl: d.hl || '', het: d.het || '', tt: vbTt(d), fid: vbFid(d), cv: vbCid(d), fname: d.file ? d.file.name : d.ten + ' (mẫu).jpg', ftype: d.file ? d.file.type : 'image/jpeg', fsize: d.file ? d.file.size : 120000, ver: d.ver || 1, at: d.at || '' }; }) };
@@ -20846,10 +20872,10 @@ if (typeof module !== 'undefined') module.exports = XW;
         todo.forEach(function (it) { chain = chain.then(it.get).then(function (b) { if (!b) return; return vbB64(b).then(function (s) { var P = 700000, parts = Math.ceil(s.length / P) || 1, c2 = Promise.resolve();
           for (var i = 0; i < parts; i++) (function (i) { c2 = c2.then(function () { return call('vb-file', { id: it.id, cty: cty, i: i, n: parts, ten: it.ten, loai: it.loai, size: b.size, data: s.slice(i * P, (i + 1) * P) }); }); })(i);
           return c2.then(function () { n++; }); }); }); });
-        return chain.then(function () { saveUnits(); return n; });
+        return chain.then(function () { saveUnits(!!remote); return n; });
       }).catch(function (er) { if (!quiet) throw er; });
   }
-  window.vbAppSync = function (u, quiet) { return vbPush(u, quiet !== false); };
+  window.vbAppSync = function (u, quiet) { return vbPush(u, quiet !== false, true); };
 
   /* ---------------- Trang ---------------- */
   PAGES.thongtin = function () {
@@ -21175,12 +21201,12 @@ if (typeof module !== 'undefined') module.exports = XW;
     var need = {}; bcdOf(u).ds.forEach(function (d) { (d.ct || []).forEach(function (c) { need[c] = 1; }); }); if (arguments[1]) (arguments[1].ct || []).forEach(function (c) { need[c] = 1; });
     return Object.assign({ at: nowVn(), tol: +rule.lateGrace || 0, tols: +rule.earlyGrace || 0, mien: mien, nv: nv, viec: viec, kinds: kinds, sec: bcdSecs(u, need) }, bcdDated(u, need));
   }
-  function bcdPush(u, quiet) {
+  function bcdPush(u, quiet, remote) {
     var call = bcdCall(u); if (!call) return quiet ? Promise.resolve() : Promise.reject(new Error('Công ty chưa kết nối máy chủ chấm công – kết nối ở Chấm công Wi‑Fi.'));
     var B = bcdOf(u), ds = B.ds.map(function (d) { var o = JSON.parse(JSON.stringify(d)); o.nhan = bcdNhan(u, d); return o; });
-    return call('bc', { cty: bcdCty(u), ds: ds, snap: bcdSnap(u) }).then(function () { B.at = nowVn(); saveUnits(); }).catch(function (er) { if (!quiet) throw er; });
+    return call('bc', { cty: bcdCty(u), ds: ds, snap: bcdSnap(u) }).then(function () { B.at = nowVn(); saveUnits(!!remote); }).catch(function (er) { if (!quiet) throw er; });
   }
-  window.bcdAppSync = function (u) { return bcdPush(u, true); };
+  window.bcdAppSync = function (u) { return bcdPush(u, true, true); };
 
   /* ---------------- Trang ---------------- */
   PAGES.bcdk = function () {

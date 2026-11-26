@@ -1072,15 +1072,35 @@ async function deleteMonthPunches(db, ym, mas) {
   }
   const results = await db.batch(st); return results.reduce((n, r) => n + ((r.meta && r.meta.changes) || 0), 0);
 }
-async function deleteMonthZktecoPunches(db, ym) {
-  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(ym || '')); if (!m) return null;
-  const from = Date.UTC(+m[1], +m[2] - 1, 1) - VN, to = Date.UTC(+m[1], +m[2], 1) - VN;
-  const r = await db.prepare("DELETE FROM cham WHERE t >= ? AND t < ? AND LOWER(COALESCE(nguoi, '')) IN ('zkteco', 'tool')").bind(from, to).run();
-  return (r.meta && r.meta.changes) || 0;
-}
 function isFinalizedTimesheet(data) {
   if (!data) return false;
   try { const d = JSON.parse(data); return !!d && d.tam !== true; } catch (e) { return false; }
+}
+function stripEmptyTimesheetArrays(value) {
+  if (Array.isArray(value)) {
+    if (!value.length) return undefined;
+    return value.map(x => x && typeof x === 'object' && !Array.isArray(x) ? stripEmptyTimesheetArrays(x) : x);
+  }
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    const clean = stripEmptyTimesheetArrays(item);
+    if (clean !== undefined) out[key] = clean;
+  }
+  return out;
+}
+function timesheetMerge(oldRaw, incoming) {
+  let old = {};
+  try { const value = typeof oldRaw === 'string' ? JSON.parse(oldRaw) : oldRaw; if (value && typeof value === 'object' && !Array.isArray(value)) old = value; } catch (e) { }
+  const delta = stripEmptyTimesheetArrays(incoming);
+  if (!delta || typeof delta !== 'object' || Array.isArray(delta) || !Object.keys(delta).length) return Object.keys(old).length ? old : null;
+  const merged = Object.assign({}, old, delta);
+  for (const key of ['ngay', 'ct', 'summary', 'suaTay']) {
+    if (!delta[key] || typeof delta[key] !== 'object' || Array.isArray(delta[key])) continue;
+    const previous = old[key] && typeof old[key] === 'object' && !Array.isArray(old[key]) ? old[key] : {};
+    merged[key] = Object.assign({}, previous, delta[key]);
+  }
+  return merged;
 }
 async function logReject(db, ma, ip, lyDo, req) {
   await db.prepare('INSERT INTO tu_choi (t, ma, ip, ly_do, tb, may) VALUES (?, ?, ?, ?, ?, ?)').bind(Date.now(), ma || null, ip, lyDo, shortUA(req.headers.get('user-agent')), req.may || null).run();
@@ -1233,8 +1253,13 @@ async function api(req, env, url) {
     if (r === 'cong' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
       const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [], keep = new Set(list.map(x => String(x.ma || '').toUpperCase()));
-      for (const x of list) { const ma = String(x.ma || '').toUpperCase(), e = demoFind(ma); if (!e) continue; const dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000), old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first(); if (old && old.du_lieu === dl) continue;
-        st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80))); }
+      for (const x of list) {
+        const ma = String(x.ma || '').toUpperCase(), e = demoFind(ma); if (!e) continue;
+        const delta = stripEmptyTimesheetArrays(x.du_lieu); if (!delta || typeof delta !== 'object' || Array.isArray(delta) || !Object.keys(delta).length) continue;
+        const old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first(), merged = timesheetMerge(old && old.du_lieu, delta), dl = JSON.stringify(merged), patch = JSON.stringify(delta);
+        if (!merged || patch.length > 20000 || dl.length > 20000 || (old && old.du_lieu === dl)) continue;
+        st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = json_patch(CASE WHEN json_valid(du_lieu) THEN du_lieu ELSE \'{}\' END, excluded.du_lieu), chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, patch, now, String(body.nguoi || '').slice(0, 80)));
+      }
       const remove = Array.isArray(body.remove) ? [...new Set(body.remove.slice(0, 2000).map(ma => String(ma || '').trim().toUpperCase()).filter(ma => MA_RE.test(ma) && demoFind(ma) && !keep.has(ma)))] : [];
       remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
@@ -1251,7 +1276,7 @@ async function api(req, env, url) {
         if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
           const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
-          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
+          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = Array.isArray(x.anh) && x.anh.length ? x.anh : old.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
           if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
           if (loai === WEEKEND_DUTY_TYPE && (!weekendDutyDates({ ly_do: requestTextPack('', '', [], dates) }) || tu !== dates.ngayNghiBuT7 || den !== dates.ngayTrucCN)) continue;
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
@@ -1279,7 +1304,7 @@ async function api(req, env, url) {
         const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o || !demoFind(o.ma)) continue;
         if (x.xoa) { mark(o.ngay); st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
         if (x.sua) {
-          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh, null, old.approval, old.checkin);
+          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), anh = Array.isArray(x.anh) && x.anh.length ? x.anh : old.anh, ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', anh, null, old.approval, old.checkin);
           const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
           if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
           mark(o.ngay); mark(ngay);
@@ -1472,7 +1497,7 @@ async function api(req, env, url) {
         const so = String(x.so || ''), o = await db.prepare('SELECT * FROM xin_muon WHERE so = ?').bind(so).first(); if (!o) continue;
         if (x.xoa) { mark(o.ngay); st.push(db.prepare('DELETE FROM xin_muon WHERE so = ?').bind(so)); continue; }
         if (x.sua) {
-          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', x.anh == null ? old.anh : x.anh, null, old.approval, old.checkin);
+          const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(x.kieu || '')) ? String(x.kieu) : o.kieu, ngay = String(x.ngay || o.ngay), old = requestText(o.ly_do), anh = Array.isArray(x.anh) && x.anh.length ? x.anh : old.anh, ly = requestTextPack(x.ly_do == null ? old.ly_do : x.ly_do, '', anh, null, old.approval, old.checkin);
           const gio = ['muon', 'som'].includes(kieu) ? String(x.gio || o.gio || '') : '';
           if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay) || (['muon', 'som'].includes(kieu) && !/^\d{2}:\d{2}$/.test(gio)) || ly == null) continue;
           mark(o.ngay); mark(ngay);
@@ -1495,7 +1520,7 @@ async function api(req, env, url) {
         if (x.xoa) { mark(o.tu, o.den); st.push(db.prepare("DELETE FROM don WHERE so = ? AND nguon = 'Điện thoại'").bind(so)); continue; }
         if (x.sua) {
           const loai = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].includes(String(x.loai || '')) ? String(x.loai) : o.loai;
-          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = x.anh == null ? old.anh : x.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
+          const tu = String(x.tu || o.tu), den = String(x.den || tu), old = requestText(o.ly_do), buoi = String(x.buoi == null ? old.buoi : x.buoi), anh = Array.isArray(x.anh) && x.anh.length ? x.anh : old.anh, dates = { ngayTrucCN: String(x.ngayTrucCN || old.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || old.ngayNghiBuT7 || '') };
           if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu || (loai === 'Nghỉ phép nửa ngày' && (den !== tu || !['sang', 'chieu'].includes(buoi)))) continue;
           if (loai === WEEKEND_DUTY_TYPE && (!weekendDutyDates({ ly_do: requestTextPack('', '', [], dates) }) || tu !== dates.ngayNghiBuT7 || den !== dates.ngayTrucCN)) continue;
           const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(o.ma, so, den, tu).first(); if (overlap) continue;
@@ -1519,20 +1544,16 @@ async function api(req, env, url) {
     if (r === 'cong' && req.method === 'POST') {
       const ym = String(body.ym || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dạng YYYY-MM' }, 400);
       const list = Array.isArray(body.list) ? body.list.slice(0, 2000) : [], st = [], keep = new Set(list.map(x => String(x.ma || '').toUpperCase()));
-      const finalized = list.some(x => x && x.ma && x.du_lieu && typeof x.du_lieu === 'object' && x.du_lieu.tam === false);
       for (const x of list) {
-        const ma = String(x.ma || '').toUpperCase(), dl = JSON.stringify(x.du_lieu || {}).slice(0, 20000);
-        const old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first();
-        if (old && old.du_lieu === dl) continue; // không đổi → giữ xác nhận cũ
-        st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = excluded.du_lieu, chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, dl, now, String(body.nguoi || '').slice(0, 80)));
+        const ma = String(x.ma || '').toUpperCase(), delta = stripEmptyTimesheetArrays(x.du_lieu);
+        if (!MA_RE.test(ma) || !delta || typeof delta !== 'object' || Array.isArray(delta) || !Object.keys(delta).length) continue;
+        const old = await db.prepare('SELECT du_lieu FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma).first(), merged = timesheetMerge(old && old.du_lieu, delta), dl = JSON.stringify(merged), patch = JSON.stringify(delta);
+        if (!merged || patch.length > 20000 || dl.length > 20000 || (old && old.du_lieu === dl)) continue; // dữ liệu rỗng/không đổi không thay bản đã lưu
+        st.push(db.prepare('INSERT INTO cong (ym, ma, du_lieu, chot, nguoi, xn, xn_at, phan_hoi) VALUES (?, ?, ?, ?, ?, 0, NULL, NULL) ON CONFLICT(ym, ma) DO UPDATE SET du_lieu = json_patch(CASE WHEN json_valid(du_lieu) THEN du_lieu ELSE \'{}\' END, excluded.du_lieu), chot = excluded.chot, nguoi = excluded.nguoi, xn = 0, xn_at = NULL, phan_hoi = NULL').bind(ym, ma, patch, now, String(body.nguoi || '').slice(0, 80)));
       }
       const remove = Array.isArray(body.remove) ? [...new Set(body.remove.slice(0, 2000).map(ma => String(ma || '').trim().toUpperCase()).filter(ma => MA_RE.test(ma) && !keep.has(ma)))] : [];
       remove.forEach(ma => st.push(db.prepare('DELETE FROM cong WHERE ym = ? AND ma = ?').bind(ym, ma)));
       if (st.length) await db.batch(st);
-      if (finalized) {
-        const rows = (await db.prepare('SELECT du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results;
-        if (rows.some(x => isFinalizedTimesheet(x.du_lieu))) await deleteMonthZktecoPunches(db, ym);
-      }
       await ccCalcClearMonth(db, cfg, ym);
       if (body.slot && body.source === 'device' && body.slot === cfg.cc_device_tinh_due) { await setCfg(db, { cc_device_tinh_due: '', cc_device_tinh_last_slot: body.slot }); cfg.cc_device_tinh_due = ''; cfg.cc_device_tinh_last_slot = body.slot; }
       else if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
