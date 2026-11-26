@@ -3308,13 +3308,23 @@ var HR = (function () {
   window.npPending = function (item) {
     if (!item || typeof item !== 'object') return false;
     var status = String(item['Trạng thái'] || item.trang_thai || item.status || '').trim().toLocaleLowerCase();
-    if (status === 'chờ duyệt' || status === 'đang chờ duyệt') return true;
+    if (status.indexOf('chờ') >= 0) return true;
     if (status) return false;
     var approval = item._approval && typeof item._approval === 'object' ? item._approval : item.approval && typeof item.approval === 'object' ? item.approval : {};
     var chain = item._approvalChain || item.approvalChain || approval.chain || approval.levels || approval.approvers || approval.approverIds;
     var total = Number(item._totalSteps || item.totalSteps || approval.totalSteps || (Array.isArray(chain) ? chain.length : 0));
     var step = Number(item._currentStep || item.currentStep || approval.currentStep || 1);
     return isFinite(total) && isFinite(step) && total > 0 && step > 0 && step <= total;
+  };
+  window.npApprovalBadge = function (unit, item) {
+    item = item && typeof item === 'object' ? item : {};
+    var status = item['Trạng thái'] || item.trang_thai || item.status || '';
+    if (!window.npPending(item)) return typeof esc === 'function' ? esc(status) : String(status);
+    var approval = item._approval && typeof item._approval === 'object' ? item._approval : item.approval && typeof item.approval === 'object' ? item.approval : {};
+    var chain = item._approvalChain || item.approvalChain || approval.chain || approval.levels || approval.approvers || approval.approverIds;
+    var total = Number(item._totalSteps || item.totalSteps || approval.totalSteps || (Array.isArray(chain) ? chain.length : 0));
+    var step = Number(item._currentStep || item.currentStep || approval.currentStep || 1);
+    return isFinite(total) && total > 0 ? 'Đang chờ duyệt (Cấp ' + (isFinite(step) && step > 0 ? step : 1) + '/' + total + ')' : 'Đang chờ duyệt';
   };
   function dashboard(units, opts) {
     units = Array.isArray(units) ? units : []; opts = opts || {};
@@ -3686,7 +3696,7 @@ var HRR = (function (HR) {
       if (!window.npPending(x)) return;
       var from = HR.requestStart(x), to = HR.requestEnd(x), fromNum = from ? dnum(from) : null, days = fromNum === null ? null : fromNum - r;
       var lv = days === null ? 'canh' : days < 0 ? 'gap' : days <= cfg.leavePendingSoon ? 'gap' : 'canh';
-      var progress = npApprovalBadge(unit, x);
+      var progress = window.npApprovalBadge(unit, x);
       var reqType = x['Loại nghỉ'] || x.loai || x.kieu || 'Đơn nghỉ', reqDays = x['Số ngày'] == null ? x.so_ngay : x['Số ngày'];
       push('don_pending', lv, x['Mã NV'] || x.ma, reqType + ' ' + (reqDays == null ? '' : reqDays) + ' ngày · ' + progress + ' – ' + (days === null ? 'chờ duyệt' : days < 0 ? 'đã qua ngày nghỉ ' + (-days) + ' ngày' : 'nghỉ sau ' + days + ' ngày'),
         'Đơn ' + (x['Số đơn'] || x.so || '') + (from ? ' từ ' + vn(from) : '') + (to ? ' đến ' + vn(to) : '') + (npApprovalTrailText(unit, x) ? ' · ' + npApprovalTrailText(unit, x) : '') + ', người duyệt: ' + (x['Người duyệt'] || x.nguoi_duyet || '?') + (x['Lý do'] || x.ly_do ? '. Lý do: ' + (x['Lý do'] || x.ly_do) : '') + '.', { days: days, due: from || null, k: x['Số đơn'] || x.so || '', sources: ['Đơn nghỉ phép'] });
