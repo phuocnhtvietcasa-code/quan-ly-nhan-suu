@@ -1105,8 +1105,21 @@ th.sortable:hover{color:var(--ink)}
 @media (prefers-reduced-motion:reduce){.db-dom img{animation:none}}
 .db-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px}
 .db-team{grid-column:span 7}.db-soon{grid-column:span 5}.db-pay{grid-column:span 5}.db-rhythm{grid-column:span 7}
-@media (max-width:1180px){.db-team,.db-soon,.db-pay,.db-rhythm{grid-column:span 12}}
+.db-chart{grid-column:span 6;min-width:0}
+.db-chart-list{display:grid;gap:2px;margin-top:10px}
+.db-chart-row{display:grid;grid-template-columns:minmax(100px,1fr) minmax(52px,1.1fr) minmax(72px,auto);align-items:center;gap:10px;padding:8px 0;border-top:1px dashed var(--line)}
+.db-chart-label{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.db-chart-label b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--ink-2)}
+.db-chart-label small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--muted)}
+.db-chart-track{height:9px;overflow:hidden;border-radius:99px;background:var(--surface-2)}
+.db-chart-track i{display:block;height:100%;min-width:0;border-radius:inherit}
+.db-chart-value{display:flex;justify-content:flex-end;gap:8px;align-items:baseline;white-space:nowrap;font-size:12px}
+.db-chart-value b{color:var(--ink);font-weight:650}
+.db-chart-value em{font-style:normal;color:var(--muted);min-width:42px;text-align:right}
+.db-chart-empty{padding:18px 12px;border:1px dashed var(--line-2);border-radius:10px;color:var(--muted);font-size:13px;text-align:center;margin-top:10px}
+@media (max-width:1180px){.db-team,.db-soon,.db-pay,.db-rhythm,.db-chart{grid-column:span 12}}
 @media (max-width:640px){.db-hero{padding:22px 20px}.db-hero h1{font-size:21px}.db-dom{width:84px;height:84px}.db-dom img{width:70px;height:70px}}
+@media (max-width:520px){.db-chart-row{grid-template-columns:minmax(0,1fr) auto;gap:5px 10px}.db-chart-track{grid-column:1/-1}.db-chart-value{grid-column:2;grid-row:1}}
 .input-sm{width:auto;padding:5px 10px;font-size:13px;height:auto}
 /* Đội ngũ */
 .db-total{display:flex;align-items:flex-end;gap:12px;margin:-2px 0 10px;flex-wrap:wrap}
@@ -4512,6 +4525,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     ndKeepMerge(u, m.data); // 0.7.1: giữ dữ liệu đã nhập qua màn Ghép cột khi quét lại / chọn lại thư mục
     u.base = m.data; u.report = m.report; u.scannedAt = nowVn();
     if (u.ovr && Object.keys(u.ovr).some(function (t) { return Object.keys(u.ovr[t]).length; })) { u.data = JSON.parse(JSON.stringify(m.data)); rebuildUnit(u); log('Áp lại ' + ovrCount(u) + ' thay đổi làm trong phần mềm lên dữ liệu vừa đọc của ' + u.name); } else { u.data = JSON.parse(JSON.stringify(m.data)); u.ver = (u.ver || 0) + 1; }
+    u._nv = null; u._bc = null;
     var used = m.report.filter(function (r) { return r.used; }).length;
     var nv = m.data.NV.length, cc = Object.keys(m.data.CC).length, bl = Object.keys(m.data.BL).length;
     log('TỔNG KẾT QUÉT "' + u.name + '": ' + HR.summary(m.data) + '; dùng ' + used + ' bảng; ' + m.report.filter(function (r) { return r.error; }).length + ' mục đọc lỗi');
@@ -4721,9 +4735,51 @@ if (typeof module !== 'undefined') module.exports = XW;
     h += '<div class="db-grid">' + dashPart('Đội ngũ', function () { return teamCard(d, us, R); }, dashFallback('Đội ngũ')) +
       dashPart('Sự kiện / Công việc cần chú ý', function () { return soonCard(d, us, R); }, dashFallback('Sự kiện / Công việc cần chú ý', 'Không có sự kiện cần hiển thị.')) +
       dashPart('Quỹ lương', function () { return payCard(d, us); }, dashFallback('Quỹ lương')) +
-      dashPart('Lịch đi làm', function () { return rhythmCard(us, R); }, dashFallback('Lịch đi làm', 'Chưa có bảng chấm công.')) + '</div><div style="height:16px"></div>';
+      dashPart('Lịch đi làm', function () { return rhythmCard(us, R); }, dashFallback('Lịch đi làm', 'Chưa có bảng chấm công.')) +
+      dashPart('Cơ cấu nhân sự theo phòng ban', function () { return deptDistributionCard(d); }, dashFallback('Cơ cấu nhân sự theo phòng ban')) +
+      dashPart('Phân bổ chấm công tháng', function () { return attendanceDistributionCard(us, R); }, dashFallback('Phân bổ chấm công tháng')) + '</div><div style="height:16px"></div>';
     h += dashPart('Việc cần xử lý gấp', urgentCard, dashFallback('Việc cần xử lý gấp', 'Chưa có việc cần xử lý.'));
     return h;
+  }
+  function chartPct(n, total) { return (total ? (Number(n) / Number(total) * 100) : 0).toFixed(1).replace('.', ',') + '%'; }
+  function deptDistributionCard(d) {
+    var total = Math.max(0, Number(d && d.staff && d.staff.active) || 0), multi = selUnits().length > 1;
+    var rows = (d && Array.isArray(d.depts) ? d.depts : []).map(function (x) {
+      return { name: (multi ? shortUnit(x.unit) + ' · ' : '') + shortDept(x.name), count: Math.max(0, Number(x.working) || 0) + Math.max(0, Number(x.maternity) || 0) };
+    }).sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name, 'vi'); });
+    var body = total ? rows.map(function (x) {
+      var pct = total ? x.count / total * 100 : 0;
+      return '<div class="db-chart-row"><span class="db-chart-label"><b title="' + esc(x.name) + '">' + esc(x.name) + '</b></span>' +
+        '<span class="db-chart-track" role="img" aria-label="' + esc(x.name + ': ' + x.count + ' người, ' + chartPct(x.count, total)) + '"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%;background:var(--s1)"></i></span>' +
+        '<span class="db-chart-value"><b class="num">' + fmtInt(x.count) + ' người</b><em>' + chartPct(x.count, total) + '</em></span></div>';
+    }).join('') : '<div class="db-chart-empty">Chưa có nhân sự đang làm để phân bổ theo phòng ban.</div>';
+    return '<div class="card card-pad db-chart db-dept-chart"><div class="card-head"><div><h3>CƠ CẤU NHÂN SỰ THEO PHÒNG BAN</h3><p>' + fmtInt(total) + ' người đang làm · tính cả nhân sự nghỉ thai sản</p></div></div>' +
+      (total ? '<div class="db-chart-list">' + (body || '<div class="db-chart-empty">Chưa có dữ liệu phòng ban.</div>') + '</div>' : body) + '</div>';
+  }
+  function attendanceDistributionCard(us, R) {
+    var months = {};
+    us.forEach(function (u) { Object.keys(dashData(ccData(u)).CC).forEach(function (m) { if (m <= R.slice(0, 7)) months[m] = 1; }); });
+    var ym = Object.keys(months).sort().pop(), total = 0, groups = {}, multi = us.length > 1;
+    if (!ym) return '<div class="card card-pad db-chart db-att-chart"><div class="card-head"><div><h3>PHÂN BỔ CHẤM CÔNG THÁNG</h3><p>Chưa có tháng chấm công</p></div></div><div class="db-chart-empty">Chưa có dữ liệu chấm công để phân bổ.</div></div>';
+    us.forEach(function (u) {
+      var data = dashData(ccData(u)), meanings = {};
+      HR.tableRows(u.data && u.data.KH).forEach(function (x) { meanings[String(x['Ký hiệu'] || '').trim().toUpperCase()] = x['Ý nghĩa'] || ''; });
+      (data.CC[ym] || []).forEach(function (x) {
+        if (!x || typeof x !== 'object') return;
+        var code = String(x['Ký hiệu'] || '').trim().toUpperCase() || '(Chưa có ký hiệu)', key = (multi ? u.id + '|' : '') + code;
+        var g = groups[key] || (groups[key] = { code: code, name: (multi ? shortUnit(u.name) + ' · ' : '') + code, detail: meanings[code] || '', count: 0 });
+        g.count++; total++;
+      });
+    });
+    var rows = Object.keys(groups).map(function (k) { return groups[k]; }).sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name, 'vi'); });
+    var body = total ? rows.map(function (x, i) {
+      var pct = x.count / total * 100, color = ['var(--s1)', 'var(--s2)', 'var(--info)', 'var(--dom)'][i % 4];
+      return '<div class="db-chart-row"><span class="db-chart-label"><b title="' + esc(x.name) + '">' + esc(x.name) + '</b>' + (x.detail ? '<small title="' + esc(x.detail) + '">' + esc(x.detail) + '</small>' : '') + '</span>' +
+        '<span class="db-chart-track" role="img" aria-label="' + esc(x.name + ': ' + x.count + ' lượt, ' + chartPct(x.count, total)) + '"><i style="width:' + Math.max(0, Math.min(100, pct)) + '%;background:' + color + '"></i></span>' +
+        '<span class="db-chart-value"><b class="num">' + fmtInt(x.count) + ' lượt</b><em>' + chartPct(x.count, total) + '</em></span></div>';
+    }).join('') : '<div class="db-chart-empty">Chưa có dữ liệu chấm công trong tháng ' + HR.ymLabel(ym) + '.</div>';
+    return '<div class="card card-pad db-chart db-att-chart"><div class="card-head"><div><h3>PHÂN BỔ CHẤM CÔNG THÁNG</h3><p>Tháng ' + HR.ymLabel(ym) + ' · ' + fmtInt(total) + ' lượt ghi nhận</p></div></div>' +
+      (total ? '<div class="db-chart-list">' + body + '</div>' : body) + '</div>';
   }
   function heroHtml(us, R) {
     var today = HR.isoToday(), who = us.length > 1 ? esc(groupLabel()) + ' · ' + whoUnits(us) : esc(us[0].name.replace(/\s*\(dữ liệu mẫu\)\s*$/, ''));
@@ -22080,7 +22136,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     'Giờ tăng ca': ['tang ca', 'gio tang ca', 'ot', 'so gio tang ca', 'lam them', 'gio lam them'],
     'Ghi chú': ['ghi chu', 'note', 'notes', 'dien giai'],
     'Chức danh': ['chuc danh', 'chuc vu', 'vi tri'],
-    'Lương cơ bản': ['luong co ban', 'lcb', 'luong chinh', 'muc luong', 'luong hop dong', 'luong hd'],
+    'Lương cơ bản': ['luong co ban', 'luongcoban', 'mucluongcoban', 'luongcb', 'luongthoathuan', 'luongchinh', 'lcb', 'luong chinh', 'muc luong', 'luong hop dong', 'luong hd'],
     'Phụ cấp chức vụ': ['phu cap chuc vu', 'pc chuc vu', 'phu cap trach nhiem'],
     'Công chuẩn': ['cong chuan', 'ngay cong chuan', 'so cong chuan'],
     'Ngày công thực tế': ['ngay cong thuc te', 'ngay cong', 'so cong', 'cong thuc te', 'cong di lam', 'tong cong'],
@@ -22098,8 +22154,8 @@ if (typeof module !== 'undefined') module.exports = XW;
     'Thu nhập tính thuế': ['thu nhap tinh thue', 'tntt'], 'Thuế TNCN': ['thue tncn', 'thue thu nhap ca nhan', 'tncn', 'thue'],
     'Tạm ứng': ['tam ung', 'ung luong', 'da ung'],
     'Số hợp đồng': ['so hop dong', 'so hd', 'so hdld', 'hop dong so'], 'Loại hợp đồng': ['loai hop dong', 'loai hd', 'loai hdld', 'hinh thuc hop dong'],
-    'Ngày ký': ['ngay ky', 'ngay ky hop dong'], 'Ngày hiệu lực': ['ngay hieu luc', 'hieu luc tu', 'ngay bat dau', 'tu ngay', 'ngay bat dau hop dong'],
-    'Ngày hết hạn': ['ngay het han', 'het han', 'ngay ket thuc', 'den ngay', 'ngay het hieu luc'], 'Mức lương theo HĐ': ['muc luong', 'luong hop dong', 'luong hd', 'muc luong theo hd', 'luong'],
+    'Ngày ký': ['ngay ky', 'ngay ky hop dong'], 'Ngày hiệu lực': ['ngay hieu luc', 'ngayhieuluc', 'hieu luc tu', 'ngay bat dau', 'ngaybatdauhd', 'ngay bat dau hd', 'ngay bat dau hop dong', 'ngaybatdauhopdong', 'ngaykyhd', 'ngay ky hd', 'ngay vao lam', 'ngayvaolam', 'tu ngay'],
+    'Ngày hết hạn': ['ngay het han', 'het han', 'ngay ket thuc', 'den ngay', 'ngay het hieu luc'], 'Mức lương theo HĐ': ['muc luong', 'luong hop dong', 'luong hd', 'muc luong theo hd', 'luong co ban', 'luongcoban', 'mucluongcoban', 'luongcb', 'luongthoathuan', 'luongchinh', 'luong'],
     'Lương hiệu suất mục tiêu': ['luong hieu suat', 'luong hieu suat muc tieu'], 'Tình trạng': ['tinh trang', 'trang thai'], 'Ngày chấm dứt': ['ngay cham dut', 'ngay thanh ly'], 'Lý do chấm dứt': ['ly do cham dut'],
     'Số đơn': ['so don', 'ma don', 'so phieu'], 'Ngày tạo đơn': ['ngay tao don', 'ngay tao', 'ngay lam don', 'ngay viet don'], 'Loại nghỉ': ['loai nghi', 'loai phep', 'hinh thuc nghi', 'che do nghi'],
     'Từ ngày': ['tu ngay', 'nghi tu', 'nghi tu ngay', 'ngay bat dau', 'bat dau'], 'Đến ngày': ['den ngay', 'nghi den', 'den het ngay', 'ngay ket thuc', 'ket thuc'],
@@ -22142,7 +22198,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (/^\d{5}\.\d+$/.test(s)) return ndHM(+s);
     return null;
   }
-  function ndNum(v) { if (v == null || v === '') return null; if (typeof v === 'number') return v; if (ndIsXD(v)) return v.s; var s = String(v).replace(/[\s₫đĐ]|vnd|vnđ/gi, ''); if (/^-?\d{1,3}([.,]\d{3})+$/.test(s)) s = s.replace(/[.,]/g, ''); else if (/^-?\d+,\d{1,2}$/.test(s)) s = s.replace(',', '.'); else s = s.replace(/,/g, ''); return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null; }
+  function ndNum(v) { if (v == null || v === '') return null; if (typeof v === 'number') return v; if (ndIsXD(v)) return v.s; var s = String(v).replace(/(?:vnd|vnđ|đồng|dong)/gi, '').replace(/[\s₫đĐ$€£¥₩]/g, ''); if (/^-?\d{1,3}([.,]\d{3})+$/.test(s)) s = s.replace(/[.,]/g, ''); else if (/^-?\d+,\d{1,2}$/.test(s)) s = s.replace(',', '.'); else s = s.replace(/,/g, ''); return /^-?\d+(\.\d+)?$/.test(s) ? parseFloat(s) : null; }
   function ndRaw(v) { return String(v == null ? '' : ndIsXD(v) ? v.s : v).replace(/\.0+$/, ''); }
   function ndPhone(v, cnt) { var s = ndRaw(v).replace(/[^\d+]/g, ''); if (!s) return null; var o = s; if (/^\+?84\d{9}$/.test(s)) s = '0' + s.replace(/^\+?84/, ''); else if (/^[1-9]\d{8}$/.test(s)) s = '0' + s; if (s !== o && cnt) cnt.phone = (cnt.phone || 0) + 1; return s; }
   function ndId(v, cnt) { var s = ndRaw(v).replace(/\s+/g, ''); if (!s) return null; if (/^\d{11}$/.test(s) || /^\d{8}$/.test(s)) { s = '0' + s; if (cnt) cnt.id = (cnt.id || 0) + 1; } return s; }
