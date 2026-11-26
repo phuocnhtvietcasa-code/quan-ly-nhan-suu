@@ -304,6 +304,12 @@ async function advanceRequestApproval(db, cfg, origin, req, now, demo, so, actor
   if (row.ma === actorId) return { ok: false, loi: 'Bạn không thể duyệt đơn của chính mình.' };
   const by = await hsLite(db, demo), approval = approvalOf(row, by);
   if (!approval || approval.currentApproverId !== actorId) return { ok: false, loi: 'Đơn này chưa đến lượt bạn duyệt.' };
+  const tripType = ['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'].includes(String(row.kieu || '').toLowerCase()) || /công tác/i.test(String(row.kieu || ''));
+  if (approve && xm && tripType) {
+    const meta = requestText(row.ly_do), ci = meta.checkin, lat = ci && ci.lat != null ? Number(ci.lat) : NaN, lng = ci && ci.lng != null ? Number(ci.lng) : NaN, checkedAt = ci && ci.checkedInAt ? Date.parse(String(ci.checkedInAt)) : NaN;
+    const hasPhoto = Array.isArray(meta.anh) && meta.anh.some(x => typeof x === 'string' && x.length > 0), hasCheckin = !!ci && Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lng) && lng >= -180 && lng <= 180 && Number.isFinite(checkedAt);
+    if (!hasPhoto || !hasCheckin) return { ok: false, loi: !hasPhoto && !hasCheckin ? 'Nhân viên cần thêm ảnh đính kèm và Check-in vị trí trước khi bắt đầu duyệt đơn.' : !hasPhoto ? 'Nhân viên cần thêm ảnh đính kèm trước khi bắt đầu duyệt đơn.' : 'Nhân viên cần Check-in vị trí trước khi bắt đầu duyệt đơn.' };
+  }
   if (!approve && !reason) return { ok: false, loi: 'Ghi lý do từ chối để nhân viên biết.' };
   const step = approval.currentStep, approverName = (by[actorId] && by[actorId].ten) || actorId, history = (approval.approvalHistory || []).slice();
   history.push({ step, approverId: actorId, approverName, action: approve ? 'approved' : 'rejected', at: now });
@@ -1764,7 +1770,7 @@ async function api(req, env, url) {
     if (body.so && (body.tai_anh || body.checkin)) {
       const x = await db.prepare('SELECT so, kieu, trang_thai, ly_do FROM xin_muon WHERE so = ? AND ma = ?').bind(String(body.so), s.nv.ma).first();
       const tripTypes = ['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'];
-      if (!x || (!tripTypes.includes(String(x.kieu || '').toLowerCase()) && !/công tác/i.test(String(x.kieu || ''))) || x.trang_thai !== 'Đã duyệt') return bad('Chỉ cập nhật check-in hoặc ảnh cho đơn công tác đã duyệt của chính bạn.');
+      if (!x || (!tripTypes.includes(String(x.kieu || '').toLowerCase()) && !/công tác/i.test(String(x.kieu || ''))) || !['Chờ duyệt', 'Đang chờ duyệt'].includes(x.trang_thai)) return bad('Chỉ cập nhật check-in hoặc ảnh cho đơn công tác đang chờ duyệt của chính bạn.');
       const old = requestText(x.ly_do);
       if (body.checkin) {
         const c = body.checkin, lat = Number(c.lat), lng = Number(c.lng), accuracy = Number(c.accuracy), at = Date.parse(String(c.checkedInAt || ''));
