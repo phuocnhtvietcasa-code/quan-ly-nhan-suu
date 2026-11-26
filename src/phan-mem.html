@@ -3305,6 +3305,17 @@ var HR = (function () {
 
   /* ---------------- Số liệu Bảng điều hành ---------------- */
   // units: [{id,name,data}], opts: {ref, month, contractDays}
+  window.npPending = function (item) {
+    if (!item || typeof item !== 'object') return false;
+    var status = String(item['Trạng thái'] || item.trang_thai || item.status || '').trim().toLocaleLowerCase();
+    if (status === 'chờ duyệt' || status === 'đang chờ duyệt') return true;
+    if (status) return false;
+    var approval = item._approval && typeof item._approval === 'object' ? item._approval : item.approval && typeof item.approval === 'object' ? item.approval : {};
+    var chain = item._approvalChain || item.approvalChain || approval.chain || approval.levels || approval.approvers || approval.approverIds;
+    var total = Number(item._totalSteps || item.totalSteps || approval.totalSteps || (Array.isArray(chain) ? chain.length : 0));
+    var step = Number(item._currentStep || item.currentStep || approval.currentStep || 1);
+    return isFinite(total) && isFinite(step) && total > 0 && step > 0 && step <= total;
+  };
   function dashboard(units, opts) {
     units = Array.isArray(units) ? units : []; opts = opts || {};
     var R = opts.ref || isoToday(), r = dnum(R), N = Number(opts.contractDays || 45), refYm = R.slice(0, 7);
@@ -3366,7 +3377,7 @@ var HR = (function () {
       // đơn nghỉ chờ duyệt
       d.DON.forEach(function (x) {
         if (!x || typeof x !== 'object') return;
-        if (!npPending(x)) return;
+        if (!window.npPending(x)) return;
         var start = requestStart(x), startNum = start ? dnum(start) : null, days = startNum === null ? null : startNum - r;
         res.leaves.pending.push({ unit: u.name, x: x, days: days });
         if (days !== null && days < 0) res.leaves.overdue++; else if (days !== null && days <= 7) res.leaves.soon++;
@@ -3672,7 +3683,7 @@ var HRR = (function (HR) {
     // 7: đơn chờ duyệt
     d.DON.forEach(function (x) {
       if (!x || typeof x !== 'object') return;
-      if (!npPending(x)) return;
+      if (!window.npPending(x)) return;
       var from = HR.requestStart(x), to = HR.requestEnd(x), fromNum = from ? dnum(from) : null, days = fromNum === null ? null : fromNum - r;
       var lv = days === null ? 'canh' : days < 0 ? 'gap' : days <= cfg.leavePendingSoon ? 'gap' : 'canh';
       var progress = npApprovalBadge(unit, x);
