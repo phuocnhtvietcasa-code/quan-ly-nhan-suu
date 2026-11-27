@@ -11059,6 +11059,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var weekendDuty = {}, weekendComp = {}, pend = {}; donRows.forEach(function (d) {
       if (!d || typeof d !== 'object') return;
       var type = d['Loại nghỉ'] || d.loai || '', status = d['Trạng thái'] || d.trang_thai || d.status || '', id = d['Mã NV'] || d.ma || '';
+      if (d._donKhac || status === 'Đã hủy') return;
       var weekend = type === 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7';
       if (weekend && status === 'Đã duyệt') {
         var sun = String(d._ngayTrucCN || d.ngayTrucCN || '').slice(0, 10), sat = String(d._ngayNghiBuT7 || d.ngayNghiBuT7 || '').slice(0, 10);
@@ -11072,7 +11073,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var dons = {}; donRows.forEach(function (d) {
       if (!d || typeof d !== 'object') return;
       var status = d['Trạng thái'] || d.trang_thai || d.status || '', from = HR.requestStart(d), type = String(d['Loại nghỉ'] || d.loai || ''), id = d['Mã NV'] || d.ma || '';
-      if (status !== 'Đã duyệt' || !from || type === 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7') return;
+      if (d._donKhac || status === 'Đã hủy' || status !== 'Đã duyệt' || !from || type === 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7') return;
       var trip = /công tác/i.test(type), code = donCodeOf(s, type);
       (dons[id] = dons[id] || []).push({ from: from, to: HR.requestEnd(d) || from, code: code, so: d['Số đơn'] || d.so, t: type, trip: trip, half: /phép nửa ngày/i.test(type), buoi: d._buoi || d.buoi || d['Buổi'] || 'sang' });
     });
@@ -11810,7 +11811,7 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   function npRound(v) { var f = Math.floor(v); return v - f >= 0.5 ? f + 1 : f; }
   // năm y đã có dữ liệu nghỉ phép trên phần mềm chưa (chưa có thì không tự tính phép tồn – tránh chuyển cả quỹ phép năm trước khi chưa dùng phần mềm; nhập tay ở nút Sửa)
-  function npHasYear(u, y) { var L = npRule(ccOf(u)); if (L.adj && L.adj[y] && Object.keys(L.adj[y]).length) return true; return (u.data.DON || []).some(function (d) { return String(d['Từ ngày'] || '').slice(0, 4) === String(y); }); }
+  function npHasYear(u, y) { var L = npRule(ccOf(u)); if (L.adj && L.adj[y] && Object.keys(L.adj[y]).length) return true; return (u.data.DON || []).some(function (d) { return d['Trạng thái'] !== 'Đã hủy' && String(d['Từ ngày'] || '').slice(0, 4) === String(y); }); }
   // quỹ phép năm của 1 người tại ngày R
   /* 17/11 góp ý người dùng (anh duyệt): PHÉP TỒN chuyển sang năm sau có hạn dùng + SỬA TAY số ngày phép còn lại
      L.carry = { on, until: 'MM-DD' (hạn dùng ở năm sau), max: số ngày tối đa được chuyển ('' = không giới hạn) }
@@ -11839,7 +11840,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var total = months >= 12 ? base + tn : npRound((base + tn) / 12 * months);
     var used = 0, plan = 0, wait = 0, yS = accrualStart.slice(0, 4) === String(y) ? accrualStart.slice(0, 7) + '-01' : y + '-01-01', yE = y + '-12-31', C = npCarry(L), cExp = y + '-' + C.until, early = 0;
     (u.data.DON || []).forEach(function (d) {
-      if (d['Mã NV'] !== id || !/phép năm|phép nửa ngày/i.test(d['Loại nghỉ'] || '') || !d['Từ ngày']) return;
+      if (d['Mã NV'] !== id || d._donKhac || d['Trạng thái'] === 'Đã hủy' || !/phép năm|phép nửa ngày/i.test(d['Loại nghỉ'] || '') || !d['Từ ngày']) return;
       var a = String(d['Từ ngày']).slice(0, 10), b = String(d['Đến ngày'] || a).slice(0, 10), from = a < yS ? yS : a, to = b > periodEnd ? periodEnd : b; if (to < from || from > yE) return;
       var n = from === a && to === b && +d['Số ngày'] ? +d['Số ngày'] : npWorkDays(u, e, from, to);
       if (d['Trạng thái'] === 'Đã duyệt') { if (a <= R) used += n; else plan += n; if (C.on) { var earlyTo = to < cExp ? to : cExp; if (from <= earlyTo) early += from === a && to === b && to <= cExp && +d['Số ngày'] ? +d['Số ngày'] : npWorkDays(u, e, from, earlyTo); } } else if (npPending(d)) wait += n;
@@ -11858,7 +11859,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var f = ps('np2', { tab: 'don', st: 'Chờ duyệt', q: '', loai: '', dept: '' }), R = refDate();
     var all = []; selUnits().forEach(function (u) { (u.data.DON || []).forEach(function (d) { all.push({ u: u, d: d }); }); });
     var cnt = { 'Chờ duyệt': 0, 'Đã duyệt': 0, 'Từ chối': 0, '': all.length }; all.forEach(function (x) { var k = npPending(x.d) ? 'Chờ duyệt' : x.d['Trạng thái']; cnt[k] = (cnt[k] || 0) + 1; });
-    var soon = all.filter(function (x) { var a = String(x.d['Từ ngày'] || '').slice(0, 10), b = String(x.d['Đến ngày'] || a).slice(0, 10); return x.d['Trạng thái'] !== 'Từ chối' && b >= R && a <= ccAdd(R, 14); }).sort(function (a, b) { return a.d['Từ ngày'] < b.d['Từ ngày'] ? -1 : 1; });
+    var soon = all.filter(function (x) { var a = String(x.d['Từ ngày'] || '').slice(0, 10), b = String(x.d['Đến ngày'] || a).slice(0, 10); return x.d['Trạng thái'] !== 'Từ chối' && x.d['Trạng thái'] !== 'Đã hủy' && b >= R && a <= ccAdd(R, 14); }).sort(function (a, b) { return a.d['Từ ngày'] < b.d['Từ ngày'] ? -1 : 1; });
     var late = all.filter(function (x) { return npPending(x.d) && String(x.d['Từ ngày']).slice(0, 10) <= R; }).length;
     var head = pageHead('Nghỉ phép', 'Đơn nghỉ được duyệt tự vào <a href="#cc">Tổng hợp công</a> · quỹ phép năm tự tính theo BLLĐ 2019.', '<button class="btn btn-primary" data-act="np-new">+ Tạo đơn nghỉ</button>');
     var kpi = '<div class="org-kpi"><div class="' + (cnt['Chờ duyệt'] ? 'k-warn' : '') + '"><b>' + cnt['Chờ duyệt'] + '</b><span>đơn chờ duyệt' + '</span>' + (late ? '<em class="kpi-late">' + late + ' đơn đã tới ngày nghỉ</em>' : '') + '</div><div><b>' + soon.length + '</b><span>lượt nghỉ trong 14 ngày tới</span></div>' +
@@ -11955,7 +11956,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       '<div class="npc-m">Đơn <span class="mono">' + esc(d['Số đơn']) + '</span>' + (d['Ngày tạo đơn'] ? ' · tạo ' + dd(d['Ngày tạo đơn']) : '') + (d['Nguồn'] ? ' · ' + esc(d['Nguồn']) : '') + (d['Người duyệt'] ? ' · ' + (d['Trạng thái'] === 'Từ chối' ? 'từ chối' : 'người duyệt') + ': ' + esc(d['Người duyệt']) + (d['Ngày duyệt'] ? ' (' + dd(d['Ngày duyệt']) + ')' : '') : '') + (d['Lý do từ chối'] ? '<br>Lý do từ chối: ' + esc(d['Lý do từ chối']) : '') + '</div>' + npApprovalTrail(u, d) + '</div>';
     if (q) { var pending = npPending(d), after = q.left - (pending ? +d['Số ngày'] : 0); h += '<div class="npq' + (after < 0 ? ' bad' : '') + '"><div><span>Phép năm ' + refDate().slice(0, 4) + '</span><b>' + nfmt(q.total) + '</b></div><div><span>Đã nghỉ</span><b>' + nfmt(q.used) + '</b></div><div><span>Đã duyệt sắp nghỉ</span><b>' + nfmt(q.plan) + '</b></div><div class="hl"><span>' + (pending ? 'Còn sau khi duyệt' : 'Còn lại') + '</span><b>' + nfmt(after) + '</b></div></div>' + (after < 0 ? '<p class="npq-w">Vượt quỹ phép – phần vượt nên chuyển sang nghỉ không lương.</p>' : ''); }
     // cùng bộ phận có ai nghỉ trùng ngày (giúp người duyệt cân nhắc người làm thay)
-    var pb = d['Phòng ban'] || (e && e['Phòng ban']), mates = (u.data.DON || []).filter(function (x) { return x['Số đơn'] !== d['Số đơn'] && x['Trạng thái'] !== 'Từ chối' && (x['Phòng ban'] || ((nvIndex(u)[x['Mã NV']] || {})['Phòng ban'])) === pb && String(x['Từ ngày']).slice(0, 10) <= b && String(x['Đến ngày'] || x['Từ ngày']).slice(0, 10) >= a; });
+    var pb = d['Phòng ban'] || (e && e['Phòng ban']), mates = (u.data.DON || []).filter(function (x) { return x['Số đơn'] !== d['Số đơn'] && x['Trạng thái'] !== 'Từ chối' && x['Trạng thái'] !== 'Đã hủy' && (x['Phòng ban'] || ((nvIndex(u)[x['Mã NV']] || {})['Phòng ban'])) === pb && String(x['Từ ngày']).slice(0, 10) <= b && String(x['Đến ngày'] || x['Từ ngày']).slice(0, 10) >= a; });
     if (mates.length) h += '<div class="notice warn" style="margin-top:10px">' + ic('info') + '<div>Cùng ' + esc(pb) + ' nghỉ trùng ngày: ' + mates.map(function (x) { return '<b>' + esc(x['Họ và tên']) + '</b> (' + HR.vnDate(x['Từ ngày']) + (x['Đến ngày'] && x['Đến ngày'] !== x['Từ ngày'] ? '–' + HR.vnDate(x['Đến ngày']) : '') + ', ' + esc(x['Trạng thái']) + ')'; }).join(', ') + '</div></div>';
     return h;
   }
@@ -11968,7 +11969,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     $('#neType', m).onchange = setHalf; setHalf(); ['neFrom', 'neTo'].forEach(function (id) { bindDateInput($('#' + id, m)); });
     $('#npEditForm', m).addEventListener('submit', function (ev) { ev.preventDefault(); var half = $('#neType', m).value === 'Nghỉ phép nửa ngày', from = HR.parseVn($('#neFrom', m).value.trim()) || '', to = half ? from : HR.parseVn($('#neTo', m).value.trim()) || from, msg = $('#neMsg', m), e = nvIndex(F.u)[d['Mã NV']];
       if (!from || !to || to < from || (half && !['sang', 'chieu'].includes($('#neHalf', m).value))) { msg.textContent = 'Chọn ngày nghỉ hợp lệ.'; return; }
-      var duplicate = (F.u.data.DON || []).filter(function (x) { return x['Số đơn'] !== d['Số đơn'] && x['Mã NV'] === d['Mã NV'] && x['Trạng thái'] !== 'Từ chối' && String(x['Từ ngày']).slice(0, 10) <= to && String(x['Đến ngày'] || x['Từ ngày']).slice(0, 10) >= from; })[0]; if (duplicate) { msg.textContent = 'Trùng với đơn ' + duplicate['Số đơn'] + '.'; return; }
+      var duplicate = (F.u.data.DON || []).filter(function (x) { return x['Số đơn'] !== d['Số đơn'] && x['Mã NV'] === d['Mã NV'] && x['Trạng thái'] !== 'Từ chối' && x['Trạng thái'] !== 'Đã hủy' && String(x['Từ ngày']).slice(0, 10) <= to && String(x['Đến ngày'] || x['Từ ngày']).slice(0, 10) >= from; })[0]; if (duplicate) { msg.textContent = 'Trùng với đơn ' + duplicate['Số đơn'] + '.'; return; }
       var n = half ? 0.5 : npWorkDays(F.u, e, from, to, $('#neType', m).value === 'Công tác'), patch = { 'Loại nghỉ': $('#neType', m).value, 'Từ ngày': from, 'Đến ngày': to, 'Số ngày': n, 'Buổi': half ? $('#neHalf', m).value : '', '_buoi': half ? $('#neHalf', m).value : '', '_lydo': $('#neWhy', m).value.trim(), 'Lý do': $('#neWhy', m).value.trim() }, updated = Object.assign({}, d, patch);
       wfAdminDon(F.u, updated, false).then(function () { editRow(F.u, 'DON', d['Số đơn'], patch, 'sửa đơn nghỉ ' + d['Số đơn'] + ' bởi ' + ccUser()); commitEdits(); m.close(); wfRefreshRequest(F.u, [d, updated], true).catch(function (er) { toast('Đơn đã sửa, chưa đồng bộ lại công', 'err', er.message); }); toast('Đã sửa đơn nghỉ', 'ok', 'Quỹ phép năm, số ngày chờ duyệt và Tổng hợp công được tính lại.'); }, function (er) { msg.textContent = 'Chưa cập nhật được đơn trên máy chủ: ' + er.message; });
     });
@@ -12003,7 +12004,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       if (b < a) { box.innerHTML = '<span class="down">Đến ngày phải sau Từ ngày</span>'; return null; }
       var trip = $('#nType', m).value === 'Công tác', n = half ? 0.5 : npWorkDays(x.u, x.e, a, b, trip), h = '<span>' + (trip ? 'Số ngày công tác' : 'Số ngày làm việc nghỉ') + ': <b>' + nfmt(n) + '</b></span>' + (half ? '<span class="faint">Nghỉ buổi ' + ($('#nHalf', m).value === 'sang' ? 'sáng' : 'chiều') + '</span>' : '<span class="faint">(đã trừ ngày nghỉ tuần, lễ tết theo ca của người này)</span>');
       if (/phép năm|phép nửa ngày/.test($('#nType', m).value)) { var q = npQuota(x.u, x.e, R); h += '<div class="notice' + (q.left - n < 0 ? ' warn' : '') + '">' + ic('np') + '<div>Phép năm còn <b>' + nfmt(q.left) + '</b> → sau đơn này còn <b>' + nfmt(q.left - n) + '</b>' + (q.left - n < 0 ? ' – vượt quỹ phép, phần vượt nên chuyển sang nghỉ không lương' : '') + '</div></div>'; }
-      var dup = (x.u.data.DON || []).filter(function (d) { return d['Mã NV'] === x.e['Mã NV'] && d['Trạng thái'] !== 'Từ chối' && String(d['Từ ngày']).slice(0, 10) <= b && String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10) >= a; })[0];
+      var dup = (x.u.data.DON || []).filter(function (d) { return d['Mã NV'] === x.e['Mã NV'] && d['Trạng thái'] !== 'Từ chối' && d['Trạng thái'] !== 'Đã hủy' && String(d['Từ ngày']).slice(0, 10) <= b && String(d['Đến ngày'] || d['Từ ngày']).slice(0, 10) >= a; })[0];
       if (dup) h += '<div class="notice warn">' + ic('info') + '<div>Trùng đơn ' + esc(dup['Số đơn']) + ' (' + esc(dup['Loại nghỉ']) + ', ' + esc(dup['Trạng thái']) + ')</div></div>';
       box.innerHTML = h; return { x: x, a: a, b: b, n: n, dup: dup, approval: approval };
     };
@@ -12194,7 +12195,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       .then(function () { wfLog(u, 'Đã báo kết quả đơn ' + d['Số đơn'] + ' (' + d['Trạng thái'] + ') về điện thoại nhân viên'); saveUnits(); }, function (er) { wfLog(u, 'Chưa báo được đơn ' + d['Số đơn'] + ': ' + er.message + ' – sẽ gửi lại khi đồng bộ', false); saveUnits(); });
   }
   function pqApprovalActor() { if (SV && SV.me && SV.me.ma) return String(SV.me.ma); var c = pqCtx(); return c && c.user && c.user.nv ? String(c.user.nv) : ''; }
-  function npPending(d) { return !!d && ['Chờ duyệt', 'Đang chờ duyệt'].indexOf(d['Trạng thái'] || d.trang_thai || d.status) >= 0; }
+  function npPending(d) { var status = d && (d['Trạng thái'] || d.trang_thai || d.status); return !!d && status !== 'Đã hủy' && ['Chờ duyệt', 'Đang chờ duyệt'].indexOf(status) >= 0; }
   function pqChainItems(raw) {
     if (Array.isArray(raw)) return raw;
     if (typeof raw === 'string') {
@@ -12284,9 +12285,9 @@ if (typeof module !== 'undefined') module.exports = XW;
     });
   }
   function wfDonFromApp(u, x, e) {
-    var half = x.loai === 'Nghỉ phép nửa ngày', weekend = x.loai === 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7', ap = x.approval || null; return { 'Số đơn': x.so, 'Ngày tạo đơn': wfIso(x.tao), 'Mã NV': x.ma, 'Họ và tên': e['Họ và tên'] || x.ma, 'Phòng ban': e['Phòng ban'] || '', 'Loại nghỉ': x.loai, 'Từ ngày': x.tu, 'Đến ngày': x.den, 'Số ngày': x.so_ngay == null ? (half ? 0.5 : weekend ? 0 : npWorkDays(u, e, x.tu, x.den)) : +x.so_ngay, '_ngayTrucCN': x.ngayTrucCN || '', '_ngayNghiBuT7': x.ngayNghiBuT7 || '', 'Buổi': x.buoi || '', '_buoi': x.buoi || '', '_lydo': x.ly_do || '', '_anh': Array.isArray(x.anh) ? x.anh : [], 'Lý do': (x.ly_do || '') + (x.ban_giao ? (x.ly_do ? ' · ' : '') + 'Bàn giao: ' + String(x.ban_giao).split('|').reverse().join(' – ') : ''), 'Người duyệt': x.nguoi_duyet || '', 'Trạng thái': x.trang_thai, 'Ngày duyệt': x.ngay_duyet || '', 'Lý do từ chối': x.ly_do_tc || '', _approval: ap, _approvalChain: x.approvalChain || ap && ap.chain || [], _currentStep: x.currentStep || ap && ap.currentStep || 0, _totalSteps: x.totalSteps || ap && ap.totalSteps || 0, _currentApproverId: x.currentApproverId || ap && ap.currentApproverId || '', _approvalHistory: x.approvalHistory || ap && ap.approvalHistory || [], duyet_ma: x.duyet_ma || '', 'Nguồn': 'Điện thoại' };
+    var half = x.loai === 'Nghỉ phép nửa ngày', weekend = x.loai === 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7', ap = x.approval || null; return { 'Số đơn': x.so, 'Ngày tạo đơn': wfIso(x.tao), 'Mã NV': x.ma, 'Họ và tên': e['Họ và tên'] || x.ma, 'Phòng ban': e['Phòng ban'] || '', 'Loại nghỉ': x.loai, 'Từ ngày': x.tu, 'Đến ngày': x.den, 'Số ngày': x.so_ngay == null ? (half ? 0.5 : weekend ? 0 : npWorkDays(u, e, x.tu, x.den)) : +x.so_ngay, '_ngayTrucCN': x.ngayTrucCN || '', '_ngayNghiBuT7': x.ngayNghiBuT7 || '', '_buoi': x.buoi || '', '_lydo': x.ly_do || '', '_anh': Array.isArray(x.anh) ? x.anh : [], '_donKhac': x.dk || null, 'Buổi': x.buoi || '', 'Lý do': (x.ly_do || '') + (x.ban_giao ? (x.ly_do ? ' · ' : '') + 'Bàn giao: ' + String(x.ban_giao).split('|').reverse().join(' – ') : ''), 'Người duyệt': x.nguoi_duyet || '', 'Trạng thái': x.trang_thai, 'Ngày duyệt': x.ngay_duyet || '', 'Lý do từ chối': x.ly_do_tc || '', _approval: ap, _approvalChain: x.approvalChain || ap && ap.chain || [], _currentStep: x.currentStep || ap && ap.currentStep || 0, _totalSteps: x.totalSteps || ap && ap.totalSteps || 0, _currentApproverId: x.currentApproverId || ap && ap.currentApproverId || '', _approvalHistory: x.approvalHistory || ap && ap.approvalHistory || [], duyet_ma: x.duyet_ma || '', 'Nguồn': 'Điện thoại' };
   }
-  function wfDonChanged(local, remote) { return ['Loại nghỉ', 'Từ ngày', 'Đến ngày', 'Số ngày', '_ngayTrucCN', '_ngayNghiBuT7', 'Buổi', '_buoi', '_lydo', 'Lý do', 'Người duyệt', 'Ngày duyệt', 'Lý do từ chối', 'Trạng thái', '_currentStep', '_currentApproverId'].some(function (k) { return String(local[k] == null ? '' : local[k]) !== String(remote[k] == null ? '' : remote[k]); }) || JSON.stringify(local._anh || []) !== JSON.stringify(remote._anh || []) || JSON.stringify(local._approval || {}) !== JSON.stringify(remote._approval || {}); }
+  function wfDonChanged(local, remote) { return ['Loại nghỉ', 'Từ ngày', 'Đến ngày', 'Số ngày', '_ngayTrucCN', '_ngayNghiBuT7', 'Buổi', '_buoi', '_lydo', 'Lý do', 'Người duyệt', 'Ngày duyệt', 'Lý do từ chối', 'Trạng thái', '_currentStep', '_currentApproverId'].some(function (k) { return String(local[k] == null ? '' : local[k]) !== String(remote[k] == null ? '' : remote[k]); }) || JSON.stringify(local._anh || []) !== JSON.stringify(remote._anh || []) || JSON.stringify(local._donKhac || {}) !== JSON.stringify(remote._donKhac || {}) || JSON.stringify(local._approval || {}) !== JSON.stringify(remote._approval || {}); }
   function wfAdminDon(u, d, remove) {
     if (d['Nguồn'] !== 'Điện thoại') return Promise.resolve(0);
     var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoOn(u) ? wfDemoGet : null; if (!call) return Promise.reject(new Error('Đơn trên điện thoại chưa kết nối máy chủ.'));
@@ -12419,7 +12420,7 @@ if (typeof module !== 'undefined') module.exports = XW;
         (u.data.DON || []).forEach(function (d) { local[String(d['Số đơn'])] = d; });
         (Array.isArray(rs[1] && rs[1].list) ? rs[1].list : []).forEach(function (x) {
           var e = nv[x.ma], d = local[x.so]; if (!e) return;
-          if (!d) { editRow(u, 'DON', x.so, wfDonFromApp(u, x, e), 'nhận đơn ' + x.so + ' gửi trên điện thoại (bản thử)'); res.don++; edited = true; }
+          if (!d) { if (x.trang_thai === 'Đã hủy') return; editRow(u, 'DON', x.so, wfDonFromApp(u, x, e), 'nhận đơn ' + x.so + ' gửi trên điện thoại (bản thử)'); res.don++; edited = true; }
            else if (npPending(d) && x.trang_thai !== d['Trạng thái']) { var remote = wfDonFromApp(u, x, e); editRow(u, 'DON', x.so, { 'Trạng thái': x.trang_thai, 'Người duyệt': x.nguoi_duyet || '', 'Ngày duyệt': x.ngay_duyet || '', 'Lý do từ chối': x.ly_do_tc || '' }, 'cập nhật cấp duyệt đơn ' + x.so + ' từ máy chủ (bản thử)'); Object.assign(d, remote); edited = true; }
            else if ((d['Trạng thái'] === 'Đã duyệt' || d['Trạng thái'] === 'Từ chối') && x.trang_thai === 'Chờ duyệt' && !d._approval) { res.kq++; wfPushDon(u, d); }
            else if (x.trang_thai === d['Trạng thái'] && wfDonChanged(d, wfDonFromApp(u, x, e))) { var remote = wfDonFromApp(u, x, e); editRow(u, 'DON', x.so, remote, 'cập nhật chi tiết đơn ' + x.so + ' từ máy chủ chấm công (bản thử)'); Object.assign(d, remote); edited = true; }

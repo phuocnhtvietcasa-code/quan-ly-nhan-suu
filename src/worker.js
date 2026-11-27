@@ -218,14 +218,21 @@ async function tbNguoiNhan(db, demo, r) { const BY = await hsLite(db, demo); ret
 // Giữ nguyên lược đồ D1: metadata buổi nghỉ, ảnh, check-in định vị và lịch trực cuối tuần được gói cùng lý do trong cột ly_do.
 const REQ_META_PREFIX = '\u001fREQ1:';
 const WEEKEND_DUTY_TYPE = 'Đăng ký trực Chủ nhật & nghỉ bù Thứ 7';
+const OWN_REQ_LOCK_MESSAGE = 'Đơn đang duyệt hoặc đã duyệt, không thể sửa hoặc hủy.';
 function requestText(raw) {
   const s = String(raw || '');
-  const empty = { ly_do: s, buoi: '', anh: [], ngayTrucCN: '', ngayNghiBuT7: '', checkin: null, approval: null, approvalChain: [], currentStep: 0, totalSteps: 0, currentApproverId: '', approvalHistory: [] };
+  const empty = { ly_do: s, buoi: '', anh: [], ngayTrucCN: '', ngayNghiBuT7: '', checkin: null, dk: null, approval: null, approvalChain: [], currentStep: 0, totalSteps: 0, currentApproverId: '', approvalHistory: [] };
   if (s.indexOf(REQ_META_PREFIX) !== 0) return empty;
   try {
-    const x = JSON.parse(s.slice(REQ_META_PREFIX.length)), a = x.approval && typeof x.approval === 'object' ? x.approval : null;
-    return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [], ngayTrucCN: String(x.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || ''), checkin: x.checkin && typeof x.checkin === 'object' ? x.checkin : null, approval: a, approvalChain: a && Array.isArray(a.chain) ? a.chain : [], currentStep: a ? +a.currentStep || 0 : 0, totalSteps: a ? +a.totalSteps || 0 : 0, currentApproverId: a ? String(a.currentApproverId || '') : '', approvalHistory: a && Array.isArray(a.approvalHistory) ? a.approvalHistory : [] };
+    const x = JSON.parse(s.slice(REQ_META_PREFIX.length)), a = x.approval && typeof x.approval === 'object' ? x.approval : null, dk = x.dk && typeof x.dk === 'object' && !Array.isArray(x.dk) ? x.dk : null;
+    return { ly_do: String(x.r || ''), buoi: String(x.b || ''), anh: Array.isArray(x.a) ? x.a : [], ngayTrucCN: String(x.ngayTrucCN || ''), ngayNghiBuT7: String(x.ngayNghiBuT7 || ''), checkin: x.checkin && typeof x.checkin === 'object' ? x.checkin : null, dk, approval: a, approvalChain: a && Array.isArray(a.chain) ? a.chain : [], currentStep: a ? +a.currentStep || 0 : 0, totalSteps: a ? +a.totalSteps || 0 : 0, currentApproverId: a ? String(a.currentApproverId || '') : '', approvalHistory: a && Array.isArray(a.approvalHistory) ? a.approvalHistory : [] };
   } catch (e) { return empty; }
+}
+function canModifyOwnReq(d) {
+  if (!d || d.trang_thai !== 'Chờ duyệt') return false;
+  const meta = requestText(d.ly_do), a = d.approval && typeof d.approval === 'object' ? d.approval : meta.approval || {};
+  const steps = Array.isArray(a.steps) ? a.steps : [], history = Array.isArray(a.approvalHistory) ? a.approvalHistory : Array.isArray(d.approvalHistory) ? d.approvalHistory : [];
+  return !steps.some(s => s && s.status === 'approved') && !history.some(s => s && s.action === 'approved') && (+a.currentStep || +d.currentStep || 1) <= 1;
 }
 function requestPhotos(value) {
   if (value == null) return [];
@@ -234,13 +241,13 @@ function requestPhotos(value) {
   for (const x of value) { const v = String(x || ''); if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(v) || v.length > 600000) return null; out.push(v); }
   return out;
 }
-function requestTextPack(reason, buoi, photos, dates, approval, checkin) {
+function requestTextPack(reason, buoi, photos, dates, approval, checkin, dk) {
   const a = requestPhotos(photos); if (!a) return null;
   const r = String(reason || '').trim().slice(0, 300), b = ['sang', 'chieu'].includes(String(buoi || '')) ? String(buoi) : '';
   const ngayTrucCN = String(dates && dates.ngayTrucCN || ''), ngayNghiBuT7 = String(dates && dates.ngayNghiBuT7 || '');
   const ci = checkin && typeof checkin === 'object' ? checkin : null;
-  if (!b && !a.length && !ngayTrucCN && !ngayNghiBuT7 && !approval && !ci) return r;
-  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a, ngayTrucCN, ngayNghiBuT7, ...(ci ? { checkin: ci } : {}), ...(approval ? { approval } : {}) }); return packed.length <= 1700000 ? packed : null;
+  if (!b && !a.length && !ngayTrucCN && !ngayNghiBuT7 && !approval && !ci && !dk) return r;
+  const packed = REQ_META_PREFIX + JSON.stringify({ r, b, a, ngayTrucCN, ngayNghiBuT7, ...(ci ? { checkin: ci } : {}), ...(dk ? { dk } : {}), ...(approval ? { approval } : {}) }); return packed.length <= 1700000 ? packed : null;
 }
 function activeApprovalChain(by, ma) {
   return nguoiDuyet(by, ma).slice(0, 5).map(id => ({ approverId: id, approverName: by[id].ten || id }));
@@ -325,7 +332,7 @@ async function advanceRequestApproval(db, cfg, origin, req, now, demo, so, actor
   if (!res.meta.changes) return { ok: false, loi: 'Đơn vừa được cấp duyệt khác xử lý.' };
   if (final) {
     if (xm) { await ccPersistApprovedDay(db, cfg, row.ma, row.ngay, demo).catch(e => console.error('ccPersistApprovedDay', e)); await ccCalcQueue(db, cfg, new Set(ccReqMonths(row.ngay, row.ngay))); }
-    else {
+    else if (!requestText(row.ly_do).dk) {
       const pair = row.loai === WEEKEND_DUTY_TYPE ? weekendDutyDates(row) : null, from = pair ? pair.ngayNghiBuT7 : row.tu, den = pair ? pair.ngayTrucCN : row.den || row.tu;
       if (pair) for (const d of [pair.ngayNghiBuT7, pair.ngayTrucCN]) await ccPersistApprovedDay(db, cfg, row.ma, d, demo).catch(e => console.error('ccPersistApprovedDay', e));
       else { let guard = 0; for (let d = from; d <= den && guard++ < 400; d = addDaysIso(d, 1)) await ccPersistApprovedDay(db, cfg, row.ma, d, demo).catch(e => console.error('ccPersistApprovedDay', e)); }
@@ -1244,7 +1251,7 @@ async function api(req, env, url) {
       const n = await deleteMonthPunches(db, body.ym, mas); if (n == null) return jc({ ok: false, loi: 'Tháng hoặc danh sách nhân viên không hợp lệ.' }, 400);
       return jc({ ok: true, n });
     }
-    if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' AND trang_thai != 'Đã hủy' ORDER BY tao DESC LIMIT 200").all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
+    if (r === 'don') return jc({ ok: true, now, list: (await db.prepare("SELECT * FROM don WHERE nguon = 'Điện thoại' ORDER BY tao DESC LIMIT 200").all()).results.map(x => ({ ...x, ...requestText(x.ly_do) })) });
     if (r === 'cong' && req.method === 'GET') {
       const ym = String(url.searchParams.get('ym') || ''); if (!/^\d{4}-\d{2}$/.test(ym)) return jc({ ok: false, loi: 'ym dáº¡ng YYYY-MM' }, 400);
       const list = (await db.prepare('SELECT ma, du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results.filter(x => demoFind(x.ma));
@@ -1297,7 +1304,7 @@ async function api(req, env, url) {
       if (notices.length) later(req, Promise.all(notices.map(n => requestNotice(db, cfg, url.origin, true, [n.ma], n.t, n.b, n.so, req, now))));
       return jc({ ok: true, n: st.length });
     }
-    if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon WHERE trang_thai != \'Đã hủy\' ORDER BY tao DESC LIMIT 300').all()).results.filter(x => demoFind(x.ma)).map(x => ({ ...x, ...requestText(x.ly_do) })) }); // 16/11
+    if (r === 'xin-muon') return jc({ ok: true, list: (await db.prepare('SELECT * FROM xin_muon ORDER BY tao DESC LIMIT 300').all()).results.filter(x => demoFind(x.ma)).map(x => ({ ...x, ...requestText(x.ly_do) })) }); // 16/11
     if (r === 'xm-cap-nhat' && req.method === 'POST') {
       const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], bao = [], months = new Set(), mark = d => ccReqMonths(d, d).forEach(m => months.add(m));
       for (const x of list) {
@@ -1787,7 +1794,14 @@ async function api(req, env, url) {
   /* ----- 16/11/2026: đơn xin đi muộn / về sớm ----- */
   if (p === '/api/xin-muon' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
-    if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
+    if (body.huy) {
+      const row = await db.prepare('SELECT * FROM xin_muon WHERE so = ? AND ma = ?').bind(String(body.so || ''), s.nv.ma).first();
+      if (!row) return bad('Không tìm thấy đơn của bạn.');
+      if (!canModifyOwnReq(row)) return bad(OWN_REQ_LOCK_MESSAGE);
+      const res = await db.prepare("UPDATE xin_muon SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(now, row.so, s.nv.ma, row.ly_do || '').run();
+      if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
+      return json({ ok: true, so: row.so });
+    }
     if (body.so && (body.tai_anh || body.checkin)) {
       const x = await db.prepare('SELECT so, kieu, trang_thai, ly_do FROM xin_muon WHERE so = ? AND ma = ?').bind(String(body.so), s.nv.ma).first();
       const tripTypes = ['cong_sang', 'cong_chieu', 'di_cong_tac', 'cong_tac', 'di_cong', 'cong'];
@@ -1804,11 +1818,18 @@ async function api(req, env, url) {
       const packed = requestTextPack(old.ly_do, '', old.anh.concat(add), null, old.approval, old.checkin); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh, mỗi ảnh không quá 600 KB.');
       await db.prepare('UPDATE xin_muon SET ly_do = ?, cap_nhat = ? WHERE so = ? AND ma = ?').bind(packed, now, x.so, s.nv.ma).run(); return json({ ok: true });
     }
+    const editSo = String(body.edit_so || '').trim(); let editing = null, editMeta = null;
+    if (editSo) {
+      editing = await db.prepare('SELECT * FROM xin_muon WHERE so = ? AND ma = ?').bind(editSo, s.nv.ma).first();
+      if (!editing) return bad('Không tìm thấy đơn của bạn.');
+      if (!canModifyOwnReq(editing)) return bad(OWN_REQ_LOCK_MESSAGE);
+      editMeta = requestText(editing.ly_do);
+    }
     const HS = await hsOf(db, s.nv.ma, demo), X = xmCfgOf(HS, demo); if (!X.on) return bad('Công ty chưa dùng đơn đi muộn, về sớm, công tác.');
-    const kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(body.kieu || '')) ? String(body.kieu) : null, isTrip = kieu === 'cong_sang' || kieu === 'cong_chieu', ngay = String(body.ngay || ''), gio = String(body.gio || ''), ly = String(body.ly_do || '').trim().slice(0, 300), anh = requestPhotos(body.anh);
+    const kieu0 = body.kieu == null && editing ? editing.kieu : body.kieu, kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(kieu0 || '')) ? String(kieu0) : null, isTrip = kieu === 'cong_sang' || kieu === 'cong_chieu', ngay = String(body.ngay || editing && editing.ngay || ''), gio = String(body.gio == null && editing ? editing.gio || '' : body.gio || ''), ly = String(body.ly_do == null && editMeta ? editMeta.ly_do : body.ly_do || '').trim().slice(0, 300), photoInput = requestPhotos(body.anh), anh = editing && (!photoInput || !photoInput.length) ? editMeta.anh : photoInput;
     if (!kieu) return bad('Chọn đi muộn, về sớm, công tác hoặc công tác.');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(ngay)) return bad('Chọn ngày.');
-    if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
+    if (!ISO_RE.test(ngay) || isNaN(Date.parse(ngay + 'T00:00:00Z')) || new Date(ngay + 'T00:00:00Z').toISOString().slice(0, 10) !== ngay) return bad('Chọn ngày.');
+    if (!photoInput) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
     if (!isTrip && (!/^\d{2}:\d{2}$/.test(gio) || hm2min(gio) === null || hm2min(gio) >= 1440)) return bad(kieu === 'muon' ? 'Nhập giờ dự kiến đến (dạng 08:45).' : 'Nhập giờ dự kiến về (dạng 16:30).');
     if (!ly) return bad('Ghi lý do để người duyệt nắm.');
     const today = isoVN(now), nowM = hm2min(vnHM(now));
@@ -1826,14 +1847,19 @@ async function api(req, env, url) {
       if (now > mocT - tp * 60e3) { const t = tp ? (tp % 60 ? (tp >= 60 ? Math.floor(tp / 60) + ' giờ ' : '') + (tp % 60) + ' phút' : (tp / 60) + ' giờ') : ''; return bad('Công ty quy định gửi đơn trước khi ' + (kieu === 'muon' ? 'vào ca' : 'về') + (tp ? ' tối thiểu ' + t : '') + '. Đã quá hạn để xin cho ngày này.'); } }
     if (!isTrip && X.han === 'ngay' && ngay < today) return bad('Công ty quy định gửi đơn chậm nhất trong ngày phát sinh.');
     if (!isTrip && X.han === 'n' && ngay < addDaysIso(today, -X.n)) return bad('Công ty cho gửi bù chậm nhất ' + X.n + ' ngày sau ngày phát sinh.');
-    const trung = await db.prepare("SELECT so FROM xin_muon WHERE ma = ? AND ngay = ? AND kieu = ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay, kieu).first();
+    const trung = await db.prepare("SELECT so FROM xin_muon WHERE ma = ? AND ngay = ? AND kieu = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay, kieu, editSo).first();
     if (trung) return bad('Đã có đơn ' + trung.so + ' cho ngày này.');
-    if (!isTrip && X.max) { const c = await db.prepare("SELECT COUNT(*) AS n FROM xin_muon WHERE ma = ? AND substr(ngay, 1, 7) = ? AND kieu IN ('muon','som') AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay.slice(0, 7)).first(); if ((c.n || 0) >= X.max) return bad('Công ty cho gửi tối đa ' + X.max + ' đơn đi muộn, về sớm, công tác mỗi tháng. Tháng ' + (+ngay.slice(5, 7)) + ' bạn đã gửi đủ.'); }
-    const so = 'XM-' + today.replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase(), BYd = await hsLite(db, demo), chain = activeApprovalChain(BYd, s.nv.ma), approval = newApprovalState(chain);
-    if (!approval) return bad('Chưa có cấp duyệt nào được cấu hình cho phòng ban của bạn. Liên hệ quản trị viên để thiết lập người duyệt đơn.');
-    if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
-    const packed = requestTextPack(ly, '', anh, null, approval); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
-    await db.prepare("INSERT INTO xin_muon (so, ma, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Đang chờ duyệt', ?, ?, ?)").bind(so, s.nv.ma, ngay, kieu, isTrip ? null : gio, phut, packed, now, chain.map(x => x.approverName).join(', '), approval.currentApproverId, now).run();
+    if (!isTrip && X.max) { const c = await db.prepare("SELECT COUNT(*) AS n FROM xin_muon WHERE ma = ? AND substr(ngay, 1, 7) = ? AND kieu IN ('muon','som') AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt')").bind(s.nv.ma, ngay.slice(0, 7), editSo).first(); if ((c.n || 0) >= X.max) return bad('Công ty cho gửi tối đa ' + X.max + ' đơn đi muộn, về sớm, công tác mỗi tháng. Tháng ' + (+ngay.slice(5, 7)) + ' bạn đã gửi đủ.'); }
+    const BYd = await hsLite(db, demo), chain = activeApprovalChain(BYd, s.nv.ma), approval = editing ? (editMeta.approval || approvalOf(editing, BYd)) : newApprovalState(chain);
+    if (!editing && !approval) return bad('Chưa có cấp duyệt nào được cấu hình cho phòng ban của bạn. Liên hệ quản trị viên để thiết lập người duyệt đơn.');
+    const packed = requestTextPack(ly, '', anh, null, approval, editMeta && editMeta.checkin, editMeta && editMeta.dk); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
+    if (editing) {
+      const res = await db.prepare("UPDATE xin_muon SET ngay = ?, kieu = ?, gio = ?, phut = ?, ly_do = ?, cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(ngay, kieu, isTrip ? null : gio, phut, packed, now, editing.so, s.nv.ma, editing.ly_do || '').run();
+      if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
+      return json({ ok: true, so: editing.so, phut });
+    }
+    const so = 'XM-' + today.replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase();
+    await db.prepare("INSERT INTO xin_muon (so, ma, ngay, kieu, gio, phut, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?)").bind(so, s.nv.ma, ngay, kieu, isTrip ? null : gio, phut, packed, now, chain.map(x => x.approverName).join(', '), approval.currentApproverId, now).run();
     const desc = isTrip ? xmTypeName(kieu) : (kieu === 'muon' ? 'đi muộn' : 'về sớm');
     later(req, requestNotice(db, cfg, url.origin, demo, chain.map(x => x.approverId), s.nv.ten + ' gửi đơn ' + desc.toLowerCase(), ngay.slice(8) + '/' + ngay.slice(5, 7) + (gio ? ' · ' + (kieu === 'muon' ? 'đến ' : 'về ') + gio : '') + (phut ? ' (' + phut + ' phút)' : '') + ' · ' + ly, so, req, now));
     return json({ ok: true, so, phut });
@@ -2016,35 +2042,102 @@ async function api(req, env, url) {
   /* ----- 0.3.1: nhân viên gửi / hủy đơn nghỉ, xác nhận công tháng ----- */
   if (p === '/api/don' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
-    if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
+    const editSo = String(body.edit_so || '').trim(); let editing = null, editMeta = null;
+    if (body.huy || editSo) {
+      const so0 = String(body.huy ? body.so : editSo), row = await db.prepare('SELECT * FROM don WHERE so = ? AND ma = ?').bind(so0, s.nv.ma).first();
+      if (!row || requestText(row.ly_do).dk) return bad('Không tìm thấy đơn của bạn.');
+      if (!canModifyOwnReq(row)) return bad(OWN_REQ_LOCK_MESSAGE);
+      if (body.huy) {
+        const res = await db.prepare("UPDATE don SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(now, row.so, s.nv.ma, row.ly_do || '').run();
+        if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
+        return json({ ok: true, so: row.so });
+      }
+      editing = row; editMeta = requestText(row.ly_do);
+    }
     const HS0 = await hsOf(db, s.nv.ma, demo), DHX = HS0 && HS0.dh || {};
     const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].concat(Object.keys(DHX).filter(k => DHX[k] && DHX[k].c));
-    const loai = LOAI.includes(body.loai) ? body.loai : null, ly = String(body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi || ''), anh = requestPhotos(body.anh);
-    let tu = String(body.tu || ''), den = String(body.den || body.tu || ''), weekendDates = null;
+    const loai0 = body.loai == null && editing ? editing.loai : body.loai, loai = LOAI.includes(loai0) ? loai0 : null, ly = String(body.ly_do == null && editMeta ? editMeta.ly_do : body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi == null && editMeta ? editMeta.buoi : body.buoi || ''), photoInput = requestPhotos(body.anh), anh = editing && (!photoInput || !photoInput.length) ? editMeta.anh : photoInput;
+    let tu = String(body.tu || (editing && editing.tu) || ''), den = String(body.den || (editing && editing.den) || body.tu || ''), weekendDates = null;
     if (!loai) return bad('Chọn loại nghỉ.');
     if (loai === WEEKEND_DUTY_TYPE) {
-      const ngayTrucCN = String(body.ngayTrucCN || ''), ngayNghiBuT7 = String(body.ngayNghiBuT7 || ''), valid = x => ISO_RE.test(x) && !isNaN(Date.parse(x + 'T00:00:00Z')) && new Date(x + 'T00:00:00Z').toISOString().slice(0, 10) === x;
+      const ngayTrucCN = String(body.ngayTrucCN || editMeta && editMeta.ngayTrucCN || ''), ngayNghiBuT7 = String(body.ngayNghiBuT7 || editMeta && editMeta.ngayNghiBuT7 || ''), valid = x => ISO_RE.test(x) && !isNaN(Date.parse(x + 'T00:00:00Z')) && new Date(x + 'T00:00:00Z').toISOString().slice(0, 10) === x;
       if (!valid(ngayTrucCN) || !valid(ngayNghiBuT7) || isoDowW(ngayTrucCN) !== 0 || isoDowW(ngayNghiBuT7) !== 6 || addDaysIso(ngayNghiBuT7, 1) !== ngayTrucCN) return bad('Chọn ngày trực Chủ nhật và ngày nghỉ bù Thứ 7 liền trước trong cùng tuần.');
       tu = ngayNghiBuT7; den = ngayTrucCN; weekendDates = { ngayTrucCN, ngayNghiBuT7 };
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den) || den < tu) return bad('Chọn ngày nghỉ (đến ngày không trước từ ngày).');
     if (loai === 'Nghỉ phép nửa ngày' && (tu !== den || !['sang', 'chieu'].includes(buoi))) return bad('Chọn một ngày nghỉ và buổi sáng hoặc buổi chiều.');
-    if (!anh) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
+    if (!photoInput) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
     if (den > isoVN(now + 366 * 864e5) || tu < isoVN(now - 62 * 864e5)) return bad('Ngày nghỉ chỉ trong khoảng 2 tháng trước đến 1 năm tới.');
-    const trung = await db.prepare("SELECT so FROM don WHERE ma = ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(s.nv.ma, den, tu).first();
+    const trung = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(s.nv.ma, editSo, den, tu).first();
     if (trung) return bad('Đã có đơn ' + trung.so + ' trùng ngày.');
-    const so = 'DT-' + isoVN(now).replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase(), HS = HS0;
+    const HS = HS0;
     if (HS && HS.dh && HS.dh[loai] && HS.dh[loai].off) return bad('Công ty không áp dụng loại nghỉ "' + loai + '". Báo quản lý trực tiếp nếu cần.'); // 20/11/2026: loại nghỉ đã tắt
     { const DH = HS && HS.dh && HS.dh[loai]; // 16/11 11:04 anh: thời hạn gửi đơn nghỉ theo từng loại (Thiết lập chấm công → Đơn xin)
       if (DH && (DH.k === 'truoc' || DH.k === 'bu')) { const ca = await caNgay(db, cfg, HS, s.nv.ma, tu), st0 = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN + (ca ? hm2min(ca.vao) : 480) * 60e3, m = Math.max(0, +DH.m || 0), tt = m % 1440 ? (m >= 1440 ? Math.floor(m / 1440) + ' ngày ' : '') + (m % 1440 % 60 ? Math.round(m % 1440 / 6) / 10 + ' giờ' : (m % 1440) / 60 + ' giờ') : m / 1440 + ' ngày';
         if (DH.k === 'truoc' && now > st0 - m * 60e3) return bad('Công ty quy định đơn ' + loai.toLowerCase() + ' phải gửi trước tối thiểu ' + tt + ' (tính đến giờ vào ca ngày bắt đầu nghỉ). Nghỉ đột xuất: báo quản lý trực tiếp để kế toán nhập đơn.');
         if (DH.k === 'bu' && now > st0 + m * 60e3) return bad('Công ty cho gửi bù đơn ' + loai.toLowerCase() + ' muộn nhất ' + tt + ' sau khi bắt đầu nghỉ. Đơn này đã quá hạn – báo quản lý trực tiếp để kế toán nhập đơn.'); } }
-    let bg = ''; const bgm = String(body.ban_giao || '').trim().toUpperCase(); if (bgm) { if (bgm === s.nv.ma) return bad('Người nhận bàn giao phải là người khác.'); const x = await db.prepare('SELECT ma, ten FROM nv WHERE ma = ? AND active = 1').bind(bgm).first(); if (!x) return bad('Không tìm thấy người nhận bàn giao.'); bg = x.ma + '|' + x.ten; }
-    const BYd = await hsLite(db, demo), chain = activeApprovalChain(BYd, s.nv.ma), approval = newApprovalState(chain);
-    if (!approval) return bad('Chưa có cấp duyệt nào được cấu hình cho phòng ban của bạn. Liên hệ quản trị viên để thiết lập người duyệt đơn.');
-    const packed = requestTextPack(ly, buoi, anh, weekendDates, approval); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
-    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, so_ngay, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Đang chờ duyệt', ?, ?, ?, 'Điện thoại', ?)").bind(so, s.nv.ma, loai, tu, den, loai === 'Nghỉ phép nửa ngày' ? 0.5 : loai === WEEKEND_DUTY_TYPE ? 0 : null, packed, now, chain.map(x => x.approverName).join(', '), approval.currentApproverId, bg, now).run();
+    let bg = ''; const bgInput = body.ban_giao == null && editing ? editing.ban_giao : body.ban_giao, bgm = String(bgInput || '').trim().toUpperCase(); if (bgm) { if (bgm === s.nv.ma) return bad('Người nhận bàn giao phải là người khác.'); const x = await db.prepare('SELECT ma, ten FROM nv WHERE ma = ? AND active = 1').bind(bgm).first(); if (!x) return bad('Không tìm thấy người nhận bàn giao.'); bg = x.ma + '|' + x.ten; }
+    const BYd = await hsLite(db, demo), chain = activeApprovalChain(BYd, s.nv.ma), approval = editing ? (editMeta.approval || approvalOf(editing, BYd)) : newApprovalState(chain);
+    if (!editing && !approval) return bad('Chưa có cấp duyệt nào được cấu hình cho phòng ban của bạn. Liên hệ quản trị viên để thiết lập người duyệt đơn.');
+    const packed = requestTextPack(ly, buoi, anh, weekendDates, approval, editMeta && editMeta.checkin, editMeta && editMeta.dk); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
+    if (editing) {
+      const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : loai === WEEKEND_DUTY_TYPE ? 0 : editing.so_ngay;
+      const res = await db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = ?, cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(loai, tu, den, n, packed, bg, now, editing.so, s.nv.ma, editing.ly_do || '').run();
+      if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
+      return json({ ok: true, so: editing.so });
+    }
+    const so = 'DT-' + isoVN(now).replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase();
+    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, so_ngay, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Chờ duyệt', ?, ?, ?, 'Điện thoại', ?)").bind(so, s.nv.ma, loai, tu, den, loai === 'Nghỉ phép nửa ngày' ? 0.5 : loai === WEEKEND_DUTY_TYPE ? 0 : null, packed, now, chain.map(x => x.approverName).join(', '), approval.currentApproverId, bg, now).run();
     later(req, requestNotice(db, cfg, url.origin, demo, chain.map(x => x.approverId), s.nv.ten + ' gửi đơn ' + loai.toLowerCase(), tu.slice(8) + '/' + tu.slice(5, 7) + (den !== tu ? ' – ' + den.slice(8) + '/' + den.slice(5, 7) : '') + (loai === 'Nghỉ phép nửa ngày' ? ' · buổi ' + (buoi === 'sang' ? 'sáng' : 'chiều') : '') + (ly ? ' · ' + ly : ''), so, req, now));
+    return json({ ok: true, so });
+  }
+  if (p === '/api/don-khac' && req.method === 'POST') {
+    const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
+    const editSo = String(body.edit_so || '').trim(); let editing = null, oldMeta = null;
+    if (body.huy || editSo) {
+      const row = await db.prepare('SELECT * FROM don WHERE so = ? AND ma = ?').bind(String(body.huy ? body.so : editSo), s.nv.ma).first();
+      if (!row || !requestText(row.ly_do).dk) return bad('Không tìm thấy đơn của bạn.');
+      if (!canModifyOwnReq(row)) return bad(OWN_REQ_LOCK_MESSAGE);
+      if (body.huy) {
+        const res = await db.prepare("UPDATE don SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(now, row.so, s.nv.ma, row.ly_do || '').run();
+        if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
+        return json({ ok: true, so: row.so });
+      }
+      editing = row; oldMeta = requestText(row.ly_do);
+    }
+    const kieu = String(body.kieu == null && oldMeta ? oldMeta.dk.kieu : body.kieu || ''), ngay = String(body.ngay || oldMeta && oldMeta.dk.ngay || ''), ly = String(body.ly_do == null && oldMeta ? oldMeta.ly_do : body.ly_do || '').trim().slice(0, 300), photoInput = requestPhotos(body.anh), anh = editing && (!photoInput || !photoInput.length) ? oldMeta.anh : photoInput;
+    if (!['lt', 'dc'].includes(kieu)) return bad('Chọn làm thêm giờ hoặc đổi ca.');
+    if (!ISO_RE.test(ngay) || isNaN(Date.parse(ngay + 'T00:00:00Z')) || new Date(ngay + 'T00:00:00Z').toISOString().slice(0, 10) !== ngay) return bad('Chọn ngày hợp lệ.');
+    if (ngay < isoVN(now - 62 * 864e5) || ngay > isoVN(now + 366 * 864e5)) return bad('Ngày yêu cầu chỉ trong khoảng 2 tháng trước đến 1 năm tới.');
+    if (!photoInput) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
+    if (!ly) return bad('Ghi rõ lý do để người duyệt nắm.');
+    let dk;
+    if (kieu === 'lt') {
+      const tu = String(body.tu || oldMeta && oldMeta.dk.tu || ''), den = String(body.den || oldMeta && oldMeta.dk.den || ''), a = hm2min(tu), b = hm2min(den);
+      if (!/^\d{2}:\d{2}$/.test(tu) || !/^\d{2}:\d{2}$/.test(den) || a === null || b === null || a === b) return bad('Nhập khoảng giờ làm thêm hợp lệ.');
+      dk = { kieu, ngay, tu, den };
+    } else {
+      const ca_cu = String(body.ca_cu == null && oldMeta ? oldMeta.dk.ca_cu || '' : body.ca_cu || '').slice(0, 40), ca_moi = String(body.ca_moi == null && oldMeta ? oldMeta.dk.ca_moi || '' : body.ca_moi || '').slice(0, 40), ma_doi = String(body.ma_doi == null && oldMeta ? oldMeta.dk.ma_doi || '' : body.ma_doi || '').trim().toUpperCase();
+      if (!ca_moi) return bad('Chọn ca muốn đổi sang.');
+      const LC = lichCfg(cfg); if (ca_moi !== 'N' && !(LC && Array.isArray(LC.ca) && LC.ca.some(x => x.id === ca_moi))) return bad('Ca muốn đổi không có trong thiết lập lịch làm.');
+      if (ma_doi) { if (ma_doi === s.nv.ma) return bad('Người đổi cùng phải là người khác.'); const nvDoi = await db.prepare('SELECT ma FROM nv WHERE ma = ? AND active = 1').bind(ma_doi).first(); if (!nvDoi) return bad('Không tìm thấy nhân viên đổi cùng.'); }
+      dk = { kieu, ngay, ca_cu, ca_moi, ma_doi };
+    }
+    const overlap = await db.prepare("SELECT so FROM don WHERE ma = ? AND so != ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(s.nv.ma, editSo, ngay, ngay).first();
+    if (overlap) return bad('Đã có đơn ' + overlap.so + ' trùng ngày.');
+    const BYd = await hsLite(db, demo), chain = activeApprovalChain(BYd, s.nv.ma), approval = editing ? (oldMeta.approval || approvalOf(editing, BYd)) : newApprovalState(chain);
+    if (!editing && !approval) return bad('Chưa có cấp duyệt nào được cấu hình cho phòng ban của bạn. Liên hệ quản trị viên để thiết lập người duyệt đơn.');
+    const packed = requestTextPack(ly, '', anh, null, approval, oldMeta && oldMeta.checkin, dk); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
+    const loai = kieu === 'lt' ? 'Làm thêm giờ' : 'Đổi ca';
+    if (editing) {
+      const res = await db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = 0, ly_do = ?, cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(loai, ngay, ngay, packed, now, editing.so, s.nv.ma, editing.ly_do || '').run();
+      if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
+      return json({ ok: true, so: editing.so });
+    }
+    const so = 'DK-' + isoVN(now).replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase();
+    await db.prepare("INSERT INTO don (so, ma, loai, tu, den, so_ngay, ly_do, tao, trang_thai, nguoi_duyet, duyet_ma, ban_giao, nguon, cap_nhat) VALUES (?, ?, ?, ?, ?, 0, ?, ?, 'Chờ duyệt', ?, ?, '', 'Điện thoại', ?)").bind(so, s.nv.ma, loai, ngay, ngay, packed, now, chain.map(x => x.approverName).join(', '), approval.currentApproverId, now).run();
+    const desc = kieu === 'lt' ? 'làm thêm giờ' : 'đổi ca';
+    later(req, requestNotice(db, cfg, url.origin, demo, chain.map(x => x.approverId), s.nv.ten + ' gửi đơn ' + desc, ngay.slice(8) + '/' + ngay.slice(5, 7) + ' · ' + ly, so, req, now));
     return json({ ok: true, so });
   }
   /* ----- 11/11 15:32: quản lý trực tiếp duyệt đơn trên app · sơ đồ tổ chức · ảnh đại diện · đổi mã PIN ----- */
