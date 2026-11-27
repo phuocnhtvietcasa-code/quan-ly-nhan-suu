@@ -1797,6 +1797,7 @@ async function api(req, env, url) {
     if (body.huy) {
       const row = await db.prepare('SELECT * FROM xin_muon WHERE so = ? AND ma = ?').bind(String(body.so || ''), s.nv.ma).first();
       if (!row) return bad('Không tìm thấy đơn của bạn.');
+      if (row.trang_thai === 'Đã hủy') return json({ ok: true, so: row.so });
       if (!canModifyOwnReq(row)) return bad(OWN_REQ_LOCK_MESSAGE);
       const res = await db.prepare("UPDATE xin_muon SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(now, row.so, s.nv.ma, row.ly_do || '').run();
       if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
@@ -1826,7 +1827,7 @@ async function api(req, env, url) {
       editMeta = requestText(editing.ly_do);
     }
     const HS = await hsOf(db, s.nv.ma, demo), X = xmCfgOf(HS, demo); if (!X.on) return bad('Công ty chưa dùng đơn đi muộn, về sớm, công tác.');
-    const kieu0 = body.kieu == null && editing ? editing.kieu : body.kieu, kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(kieu0 || '')) ? String(kieu0) : null, isTrip = kieu === 'cong_sang' || kieu === 'cong_chieu', ngay = String(body.ngay || editing && editing.ngay || ''), gio = String(body.gio == null && editing ? editing.gio || '' : body.gio || ''), ly = String(body.ly_do == null && editMeta ? editMeta.ly_do : body.ly_do || '').trim().slice(0, 300), photoInput = requestPhotos(body.anh), anh = editing && (!photoInput || !photoInput.length) ? editMeta.anh : photoInput;
+    const kieu0 = body.kieu == null && editing ? editing.kieu : body.kieu, kieu = ['muon', 'som', 'cong_sang', 'cong_chieu'].includes(String(kieu0 || '')) ? String(kieu0) : null, isTrip = kieu === 'cong_sang' || kieu === 'cong_chieu', ngay = String(body.ngay || editing && editing.ngay || ''), gio = String(body.gio == null && editing ? editing.gio || '' : body.gio || ''), ly = String(body.ly_do == null && editMeta ? editMeta.ly_do : body.ly_do || '').trim().slice(0, 300), photoProvided = Object.prototype.hasOwnProperty.call(body, 'anh') && Array.isArray(body.anh), photoInput = requestPhotos(body.anh), anh = editing && !photoProvided ? editMeta.anh : photoInput;
     if (!kieu) return bad('Chọn đi muộn, về sớm, công tác hoặc công tác.');
     if (!ISO_RE.test(ngay) || isNaN(Date.parse(ngay + 'T00:00:00Z')) || new Date(ngay + 'T00:00:00Z').toISOString().slice(0, 10) !== ngay) return bad('Chọn ngày.');
     if (!photoInput) return bad('Ảnh đính kèm không hợp lệ hoặc quá lớn.');
@@ -2046,6 +2047,7 @@ async function api(req, env, url) {
     if (body.huy || editSo) {
       const so0 = String(body.huy ? body.so : editSo), row = await db.prepare('SELECT * FROM don WHERE so = ? AND ma = ?').bind(so0, s.nv.ma).first();
       if (!row || requestText(row.ly_do).dk) return bad('Không tìm thấy đơn của bạn.');
+      if (body.huy && row.trang_thai === 'Đã hủy') return json({ ok: true, so: row.so });
       if (!canModifyOwnReq(row)) return bad(OWN_REQ_LOCK_MESSAGE);
       if (body.huy) {
         const res = await db.prepare("UPDATE don SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(now, row.so, s.nv.ma, row.ly_do || '').run();
@@ -2056,7 +2058,7 @@ async function api(req, env, url) {
     }
     const HS0 = await hsOf(db, s.nv.ma, demo), DHX = HS0 && HS0.dh || {};
     const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].concat(Object.keys(DHX).filter(k => DHX[k] && DHX[k].c));
-    const loai0 = body.loai == null && editing ? editing.loai : body.loai, loai = LOAI.includes(loai0) ? loai0 : null, ly = String(body.ly_do == null && editMeta ? editMeta.ly_do : body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi == null && editMeta ? editMeta.buoi : body.buoi || ''), photoInput = requestPhotos(body.anh), anh = editing && (!photoInput || !photoInput.length) ? editMeta.anh : photoInput;
+    const loai0 = body.loai == null && editing ? editing.loai : body.loai, loai = LOAI.includes(loai0) ? loai0 : null, ly = String(body.ly_do == null && editMeta ? editMeta.ly_do : body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi == null && editMeta ? editMeta.buoi : body.buoi || ''), photoProvided = Object.prototype.hasOwnProperty.call(body, 'anh') && Array.isArray(body.anh), photoInput = requestPhotos(body.anh), anh = editing && !photoProvided ? editMeta.anh : photoInput;
     let tu = String(body.tu || (editing && editing.tu) || ''), den = String(body.den || (editing && editing.den) || body.tu || ''), weekendDates = null;
     if (!loai) return bad('Chọn loại nghỉ.');
     if (loai === WEEKEND_DUTY_TYPE) {
@@ -2081,7 +2083,7 @@ async function api(req, env, url) {
     if (!editing && !approval) return bad('Chưa có cấp duyệt nào được cấu hình cho phòng ban của bạn. Liên hệ quản trị viên để thiết lập người duyệt đơn.');
     const packed = requestTextPack(ly, buoi, anh, weekendDates, approval, editMeta && editMeta.checkin, editMeta && editMeta.dk); if (packed == null) return bad('Ảnh quá lớn. Chọn tối đa 5 ảnh JPEG đã nén, mỗi ảnh không quá 600 KB.');
     if (editing) {
-      const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : loai === WEEKEND_DUTY_TYPE ? 0 : editing.so_ngay;
+      const n = loai === 'Nghỉ phép nửa ngày' ? 0.5 : loai === WEEKEND_DUTY_TYPE ? 0 : null;
       const res = await db.prepare("UPDATE don SET loai = ?, tu = ?, den = ?, so_ngay = ?, ly_do = ?, ban_giao = ?, cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(loai, tu, den, n, packed, bg, now, editing.so, s.nv.ma, editing.ly_do || '').run();
       if (!res.meta.changes) return bad(OWN_REQ_LOCK_MESSAGE);
       return json({ ok: true, so: editing.so });
@@ -2097,6 +2099,7 @@ async function api(req, env, url) {
     if (body.huy || editSo) {
       const row = await db.prepare('SELECT * FROM don WHERE so = ? AND ma = ?').bind(String(body.huy ? body.so : editSo), s.nv.ma).first();
       if (!row || !requestText(row.ly_do).dk) return bad('Không tìm thấy đơn của bạn.');
+      if (body.huy && row.trang_thai === 'Đã hủy') return json({ ok: true, so: row.so });
       if (!canModifyOwnReq(row)) return bad(OWN_REQ_LOCK_MESSAGE);
       if (body.huy) {
         const res = await db.prepare("UPDATE don SET trang_thai = 'Đã hủy', cap_nhat = ? WHERE so = ? AND ma = ? AND trang_thai = 'Chờ duyệt' AND COALESCE(ly_do, '') = ?").bind(now, row.so, s.nv.ma, row.ly_do || '').run();
@@ -2105,7 +2108,7 @@ async function api(req, env, url) {
       }
       editing = row; oldMeta = requestText(row.ly_do);
     }
-    const kieu = String(body.kieu == null && oldMeta ? oldMeta.dk.kieu : body.kieu || ''), ngay = String(body.ngay || oldMeta && oldMeta.dk.ngay || ''), ly = String(body.ly_do == null && oldMeta ? oldMeta.ly_do : body.ly_do || '').trim().slice(0, 300), photoInput = requestPhotos(body.anh), anh = editing && (!photoInput || !photoInput.length) ? oldMeta.anh : photoInput;
+    const kieu = String(body.kieu == null && oldMeta ? oldMeta.dk.kieu : body.kieu || ''), ngay = String(body.ngay || oldMeta && oldMeta.dk.ngay || ''), ly = String(body.ly_do == null && oldMeta ? oldMeta.ly_do : body.ly_do || '').trim().slice(0, 300), photoProvided = Object.prototype.hasOwnProperty.call(body, 'anh') && Array.isArray(body.anh), photoInput = requestPhotos(body.anh), anh = editing && !photoProvided ? oldMeta.anh : photoInput;
     if (!['lt', 'dc'].includes(kieu)) return bad('Chọn làm thêm giờ hoặc đổi ca.');
     if (!ISO_RE.test(ngay) || isNaN(Date.parse(ngay + 'T00:00:00Z')) || new Date(ngay + 'T00:00:00Z').toISOString().slice(0, 10) !== ngay) return bad('Chọn ngày hợp lệ.');
     if (ngay < isoVN(now - 62 * 864e5) || ngay > isoVN(now + 366 * 864e5)) return bad('Ngày yêu cầu chỉ trong khoảng 2 tháng trước đến 1 năm tới.');
