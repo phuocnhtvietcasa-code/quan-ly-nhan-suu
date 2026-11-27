@@ -7672,6 +7672,13 @@ if (typeof module !== 'undefined') module.exports = XW;
      Tài khoản lưu ở u.acc[Mã NV] = { st: on|lock|off, at, pinAt, pin (băm), why } như ACTS.acc ở Danh sách nhân sự. */
   var ANV_SV = {}, ANV_AT = {};
   function anvLink(u) { return wfOn(u) ? u.wf.url.replace(/\/+$/, '') : u.source === 'sample' ? WF_DEMO : ''; }
+  function anvRoleCell(r, adm) { // 1.0.5: vai trò quản trị của người có tài khoản ứng dụng
+    if (r.st === 'off' || typeof pqByNv !== 'function') return '<span class="faint">—</span>';
+    var x = pqByNv(r.id), ro = x && pqRole(x.role), key = r.u.id + '|' + esc(r.id);
+    var tag = x ? (x.off ? '<span class="tag tag-bad">' + esc(ro ? ro.t : 'Chưa gán') + ' · đang khóa</span>' : pqRoleTag(ro, x)) : '<span class="faint">Chỉ dùng ứng dụng</span>';
+    if (!adm) return tag;
+    return tag + '<div class="anv-pq">' + (x ? '<button class="btn btn-sm" data-act="pq-gan" data-id="' + key + '">Đổi vai trò</button>' + (ro && !ro.sys ? '<button class="btn btn-sm" data-act="pq-qx" data-id="' + esc(x.id) + '">Phân quyền chi tiết</button>' : '') : '<button class="btn btn-sm" data-act="pq-gan" data-id="' + key + '">Gán vai trò</button>') + '</div>';
+  }
   function anvRows(us) {
     var R = refDate(), out = [];
     us.forEach(function (u) { var mat = HR.maternitySet(u.data, R), sv = (ANV_SV[u.id] || {}).map || {};
@@ -7688,8 +7695,8 @@ if (typeof module !== 'undefined') module.exports = XW;
       if (!force && ANV_AT[u.id] && Date.now() - ANV_AT[u.id] < 30e3) return; ANV_AT[u.id] = Date.now();
       (real ? wfCall(u, 'tai-khoan') : wfDemoGet('tai-khoan')).then(function (j) {
         var map = {}; (j.list || []).forEach(function (x) { map[String(x.ma).toUpperCase()] = x; }); ANV_SV[u.id] = { map: map, now: j.now || Date.now(), ok: true };
-        if (curPage === 'appnv') render();
-      }, function (er) { ANV_SV[u.id] = { map: {}, err: er.message }; if (curPage === 'appnv') render(); });
+        if (curPage === 'appnv' || curPage === 'phanquyen') render();
+      }, function (er) { ANV_SV[u.id] = { map: {}, err: er.message }; if (curPage === 'appnv' || curPage === 'phanquyen') render(); });
     });
   }
   // Cấp mới / đặt lại PIN: trả về Promise<pin>; khóa / mở khóa: đổi ngay
@@ -7729,7 +7736,8 @@ if (typeof module !== 'undefined') module.exports = XW;
     var flt = (multi ? sel('anvCo', 'Công ty', [['', 'Tất cả công ty']].concat(us.map(function (u) { return [u.id, shortUnit(u.name)]; })), f.co || '') : '') +
       sel('anvPb', 'Phòng ban', [['', 'Tất cả phòng ban']].concat(pbs.map(function (x) { return [x, x]; })), f.pb || '') +
       sel('anvSt', 'Trạng thái', [['all', 'Tất cả trạng thái'], ['on', 'Đang dùng'], ['off', 'Chưa cấp tài khoản'], ['lock', 'Đã khóa'], ['never', 'Chưa đăng nhập lần nào'], ['tmp', 'Đang khóa tạm (sai PIN)'], ['leftOn', 'Đã nghỉ việc còn mở']], f.tab || 'all');
-    var cols = [['Nhân sự', 200, ''], ['Phòng ban', 150, '']].concat(multi ? [['Công ty', 110, '']] : []).concat([['Tài khoản', 180, ''], ['Đăng nhập lần cuối', 150, ''], ['', 250, '']]);
+    var cols = [['Nhân sự', 200, ''], ['Phòng ban', 150, '']].concat(multi ? [['Công ty', 110, '']] : []).concat([['Tài khoản', 150, ''], ['Vai trò quản trị', 175, ''], ['Đăng nhập lần cuối', 150, ''], ['', 250, '']]);
+    var pqA = typeof pqAdmin === 'function' && pqAdmin() && typeof pqByNv === 'function';
     var body = list.map(function (r) {
       var sv = r.sv, tmp = sv && sv.lock_until > Date.now(), u = r.u;
       var stB = r.st === 'on' ? (r.left ? '<span class="tag tag-bad">Đã nghỉ việc – còn mở</span>' : '<span class="tag tag-ok">Đang dùng</span>') : r.st === 'lock' ? '<span class="tag tag-mute">Đã khóa</span>' : '<span class="tag tag-warn">Chưa cấp</span>';
@@ -7742,7 +7750,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       var act = r.st === 'off' ? (r.left ? '' : '<button class="btn btn-sm btn-primary" data-act="anv-do" data-k="grant" data-u="' + u.id + '" data-id="' + esc(r.id) + '">Tạo tài khoản</button>')
         : r.st === 'on' ? (tmp ? ab('anv-unlock', 'Mở khóa ngay', 1) : '') + info + '<button class="btn btn-sm" data-act="anv-do" data-k="lock" data-u="' + u.id + '" data-id="' + esc(r.id) + '">Khóa</button>'
         : info + (r.left ? '' : '<button class="btn btn-sm" data-act="anv-do" data-k="unlock" data-u="' + u.id + '" data-id="' + esc(r.id) + '">Mở khóa</button>');
-      return '<tr' + (r.left ? ' class="is-left"' : '') + '><td><a href="#" class="plink" data-act="profile" data-u="' + u.id + '" data-id="' + esc(r.id) + '">' + esc(r.e['Họ và tên']) + '</a><div class="anv-sub mono">' + esc(r.id) + (r.left ? ' · đã nghỉ việc' : '') + '</div></td><td>' + esc(r.e['Phòng ban'] || '') + '</td>' + (multi ? '<td>' + esc(shortUnit(u.name)) + '</td>' : '') + '<td>' + stB + '</td><td>' + lg + '</td><td><span class="anv-acts">' + act + '</span></td></tr>';
+      return '<tr' + (r.left ? ' class="is-left"' : '') + '><td><a href="#" class="plink" data-act="profile" data-u="' + u.id + '" data-id="' + esc(r.id) + '">' + esc(r.e['Họ và tên']) + '</a><div class="anv-sub mono">' + esc(r.id) + (r.left ? ' · đã nghỉ việc' : '') + '</div></td><td>' + esc(r.e['Phòng ban'] || '') + '</td>' + (multi ? '<td>' + esc(shortUnit(u.name)) + '</td>' : '') + '<td>' + stB + '</td><td>' + anvRoleCell(r, pqA) + '</td><td>' + lg + '</td><td><span class="anv-acts">' + act + '</span></td></tr>';
     }).join('');
     var tbl = list.length ? '<div class="hn-tw hn-gw">' + hnGridOpen('anv', cols, 'anv-g') + '<tbody>' + body + '</tbody></table></div>' + hnGridFoot('anv') : '<div class="card card-pad"><p class="muted" style="margin:0">Không có tài khoản nào ở mục này.</p></div>';
     return maDupBanner(us) + '<div class="page-head"><div><h1>Ứng dụng nhân viên</h1><p class="muted">Cấp tài khoản để nhân viên chấm công, xem công, gửi đơn, xem phiếu lương, hồ sơ, hợp đồng và hành trình hội nhập ngay trên điện thoại. Tài khoản đăng nhập là <b>Mã NV</b>, mật khẩu là <b>mã PIN 6 số</b>' + (S.settings.pq && (S.settings.pq.on || SV) ? '. Người được cấp quyền quản trị (Cài đặt hệ thống → Phân quyền tài khoản) đăng nhập bằng <b>mật khẩu</b> thay mã PIN, trên ứng dụng có thêm mục <b>Quản trị</b>' : '') + '.</p></div><div class="link-row" style="margin:0"><button class="btn" data-act="anv-refresh">' + ic('hn_redo', 15) + 'Cập nhật trạng thái</button></div></div>' +
@@ -21442,7 +21450,7 @@ if (typeof module !== 'undefined') module.exports = XW;
      Móc trong app.js: pqSave (saveSettings / saveUnits / saveDone), pqMerge, pqNo (navHid), pqGate + pqDenyHtml + pqRenderStart + pqAfterRender (render), pqBoot (boot).
      Móc khác: ccUser (chamcong.js), pqAct (duyệt cơ cấu, chốt lương, chốt công, duyệt đơn), khoPut / khoDel (nhansu.js).
      ===================================================================== */
-  var PQ = { uid: null, pv: null, locked: false, g: 0, ok: 0, rend: false, page: '', last: Date.now(), tries: 0, wait: 0, rb: 0 };
+  var PQ = { uid: null, pv: null, locked: false, g: 0, ok: 0, rend: false, page: '', last: Date.now(), tries: 0, wait: 0, rb: 0, afterQx: 0, preNv: null };
   var PQ_SS = 'qtt-qlns-pq';
   var PQ_UI = ['unit', 'pick', 'month', 'theme', 'color', 'colorV', 'refMode', 'refDate', 'nvCols', 'gxW', 'blHide', 'user', 'ldHideV', 'tplV', 'hnBmV', 'dtSeed', 'tsCols', 'tsW'];
   var PQ_ACT = [['cocau', 'Duyệt, mở lại cơ cấu nhân sự', 'duyệt cơ cấu nhân sự'], ['bl', 'Chốt, mở lại bảng lương', 'chốt bảng lương'], ['cc', 'Chốt, mở lại công tháng', 'chốt công'], ['np', 'Duyệt, từ chối đơn nghỉ', 'duyệt đơn nghỉ']];
@@ -21478,6 +21486,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       '.pq-mx td.l small{color:var(--faint)}.pq-chk{display:flex;flex-direction:column;gap:6px;max-height:170px;overflow:auto;padding:8px 10px;border:1px solid var(--line);border-radius:10px}.pq-chk label{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:400;color:var(--ink)}' +
       '.pq-code{font-family:ui-monospace,Consolas,monospace;font-size:20px;font-weight:700;letter-spacing:.08em;text-align:center;padding:14px;border-radius:12px;background:var(--surface-2);margin:10px 0;user-select:all}' +
       '.pq-rl p{margin:0 0 6px;font-size:13px;color:var(--ink-2);line-height:1.6}.pq-rl p:last-child{margin:0}.pq-rl b{color:var(--ink);margin-right:4px}.pq-tbl td.l{white-space:normal;min-width:170px}.pq-tbl td.act .btn{padding:0 9px}' +
+      '.pq-qxh{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;background:var(--surface-2);border-radius:10px;font-size:12.5px;line-height:1.5;color:var(--ink-2);margin:8px 0 12px}.pq-qxh svg{width:16px;height:16px;flex-shrink:0}.pq-qxh:empty,.pq-qxh[hidden]{display:none}.pq-cus{display:block;color:var(--warn,#A36A00);font-size:11px;margin-top:3px}.pq-sec{margin:20px 0 10px}.pq-sec h3{margin:0 0 5px;font-size:15px}.pq-sec p{margin:0;font-size:12.5px;line-height:1.55}.pq-qx-top{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;font-size:13px}.pq-qx-w{max-height:65vh;overflow:auto}.pq-qs{min-width:170px;height:32px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-size:12.5px;padding:0 7px}.pq-qs.cus{background:var(--warn-soft);border-color:transparent;font-weight:600}.anv-pq{display:flex;gap:4px;justify-content:center;flex-wrap:wrap;margin-top:5px}.anv-pq .btn{padding:0 7px!important;font-size:11.5px}' +
       '.pq-yl{background:#F6C445!important;border-color:#E3AE22!important;color:#3A2A00!important;font-weight:700}.pq-yl:hover{background:#EDB82F!important}' +
       '.pq-tabs{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}.pq-tabs button{display:flex;gap:14px;align-items:center;text-align:left;padding:14px 18px;border-radius:14px;border:2px solid var(--line);background:var(--surface);color:var(--ink-2);font:inherit;cursor:pointer;transition:border-color .15s,box-shadow .15s}' +
       '.pq-tabs button:hover{border-color:var(--pri)}.pq-tabs .ti{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:var(--surface-2);color:var(--muted);flex-shrink:0}' +
@@ -21518,6 +21527,8 @@ if (typeof module !== 'undefined') module.exports = XW;
   function pqS() { var s = S.settings.pq; if (!s || !s.roles) s = S.settings.pq = { v: 1, on: false, lock: 15, roles: pqDefRoles(), users: [] }; return s; }
   function pqUser(id) { var s = S.settings.pq; return (s && s.users || []).filter(function (x) { return x.id === id; })[0] || null; }
   function pqRole(id) { var s = S.settings.pq; return (s && s.roles || []).filter(function (r) { return r.id === id; })[0] || null; }
+  function pqEff(r, x) { if (!r || r.sys || !x) return r; var qx = x.qx && typeof x.qx === 'object' ? x.qx : null, ax = x.ax && typeof x.ax === 'object' ? x.ax : null; if (!(qx && Object.keys(qx).length) && !(ax && Object.keys(ax).length)) return r; return { id: r.id, t: r.t, d: r.d, pb: r.pb, q: Object.assign({}, r.q || {}, qx || {}), a: Object.assign({}, r.a || {}, ax || {}), cus: 1 }; }
+  function pqCusN(x) { return (x && x.qx ? Object.keys(x.qx).length : 0) + (x && x.ax ? Object.keys(x.ax).length : 0); }
   function pqRaw() { return dbSet('settings', S.settings).catch(function (e) { logErr('Lưu phân quyền', e); }); }
   // null = không giới hạn (chưa bật phân quyền và không xem thử)
   function pqCtx() {
@@ -21525,13 +21536,13 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (SV) { // 0.8.1: mở từ máy chủ của đơn vị – người đăng nhập do máy chủ xác thực (tài khoản chung với ứng dụng nhân viên)
       if (!SV.me) return { role: { id: '_', t: '', q: {} }, dv: [], pb: [], name: '', none: true };
       var s0 = pqS(), su = s0.users.filter(function (x) { return x.nv && x.nv === SV.me.ma; })[0];
-      if (su && !su.off) return { role: pqRole(su.role) || { id: '_', t: 'Chưa gán vai trò', q: {} }, dv: su.dv || 'all', pb: su.pb || [], name: su.name, user: su, sv: 1 };
+      if (su && !su.off) return { role: pqEff(pqRole(su.role), su) || { id: '_', t: 'Chưa gán vai trò', q: {} }, dv: su.dv || 'all', pb: su.pb || [], name: su.name, user: su, sv: 1 };
       if (SV.me.sys) return { role: s0.roles.filter(function (r) { return r.sys; })[0] || { id: 'qt', t: 'Quản trị', sys: 1 }, dv: 'all', pb: [], name: SV.me.ten, sv: 1 };
       var sr = pqRole(SV.me.r); return sr ? { role: sr, dv: 'all', pb: [], name: SV.me.ten, sv: 1 } : { role: { id: '_', t: SV.me.t || 'Chưa gán vai trò', q: {} }, dv: [], pb: [], name: SV.me.ten, none: true };
     }
     var s = S.settings.pq; if (!s || !s.on) return null;
     var u = PQ.uid && pqUser(PQ.uid); if (!u || u.off) return { role: { id: '_', t: '', q: {} }, dv: [], pb: [], name: '', none: true };
-    return { role: pqRole(u.role) || { id: '_', t: 'Chưa gán vai trò', q: {} }, dv: u.dv || 'all', pb: u.pb || [], name: u.name, user: u };
+    return { role: pqEff(pqRole(u.role), u) || { id: '_', t: 'Chưa gán vai trò', q: {} }, dv: u.dv || 'all', pb: u.pb || [], name: u.name, user: u };
   }
   function pqAdmin() { var c = pqCtx(); return !c || !!(c.role && c.role.sys && !c.none); }
   function pqLvl(id) {
@@ -21962,25 +21973,37 @@ if (typeof module !== 'undefined') module.exports = XW;
     var rows = '<tr><td class="l"><b>Quản trị hệ thống</b> <span class="tag tag-mute">Dự phòng</span>' + (me.du_phong ? ' <span class="tag tag-info">Đang dùng</span>' : '') + '<small>Tạo lúc cài đặt máy chủ, dùng khi không còn quản trị viên nào đăng nhập được</small></td><td>quantri</td><td><span class="tag tag-dom">Quản trị</span></td><td>Tất cả</td><td>Tất cả</td><td><span class="tag tag-ok">Hoạt động</span></td><td>–</td><td class="act">' + (me.du_phong ? '<button class="btn btn-sm" data-act="pq-pass">Đổi mật khẩu</button>' : '<span class="faint">Đổi ở trang Quản lý</span>') + '</td></tr>';
     rows += s.users.map(function (x) {
       var r = pqRole(x.role);
-      return '<tr><td class="l"><b>' + esc(x.name) + '</b>' + (x.nv && x.nv === me.ma ? ' <span class="tag tag-info">Đang dùng</span>' : '') + (x.mau ? ' <span class="tag tag-mute">Mẫu</span>' : '') + '</td><td>' + esc(x.nv || x.user) + '</td><td>' + (r ? '<span class="tag ' + (r.sys ? 'tag-dom' : 'tag-info') + '">' + esc(r.t) + '</span>' : '<span class="tag tag-bad">Chưa gán</span>') + '</td><td>' + esc(pqDvTxt(x)) + '</td><td>' + esc(x.pb && x.pb.length ? x.pb.join(', ') : 'Tất cả') + '</td>' +
+      return '<tr><td class="l"><b>' + esc(x.name) + '</b>' + (x.nv && x.nv === me.ma ? ' <span class="tag tag-info">Đang dùng</span>' : '') + (x.mau ? ' <span class="tag tag-mute">Mẫu</span>' : '') + '</td><td>' + esc(x.nv || x.user) + '</td><td>' + pqRoleTag(r, x) + '</td><td>' + esc(pqDvTxt(x)) + '</td><td>' + esc(x.pb && x.pb.length ? x.pb.join(', ') : 'Tất cả') + '</td>' +
         '<td>' + stt(x) + '</td><td>' + esc(last(x)) + '</td>' +
-        '<td class="act"><button class="btn btn-sm" data-act="pq-user" data-id="' + x.id + '">' + (x.nv ? 'Sửa' : 'Gắn nhân sự') + '</button>' + (x.nv ? '<button class="btn btn-sm" data-act="pq-toggle" data-id="' + x.id + '">' + (x.off ? 'Mở khóa' : 'Khóa') + '</button>' : '') + '<button class="btn btn-sm btn-danger-ghost" data-act="pq-del" data-id="' + x.id + '">Xóa</button></td></tr>';
+        '<td class="act"><button class="btn btn-sm" data-act="pq-user" data-id="' + x.id + '">' + (x.nv ? 'Sửa' : 'Gắn nhân sự') + '</button>' + pqQxBtn(r, x) + (x.nv ? '<button class="btn btn-sm" data-act="pq-toggle" data-id="' + x.id + '">' + (x.off ? 'Mở khóa' : 'Khóa') + '</button>' : '') + '<button class="btn btn-sm btn-danger-ghost" data-act="pq-del" data-id="' + x.id + '">Xóa</button></td></tr>';
     }).join('');
     return '<div class="card"><div class="tbl-wrap"><table class="tbl pq-tbl sv-tk"><thead><tr><th class="l">Họ và tên</th><th>Tên đăng nhập</th><th>Vai trò</th><th>Công ty</th><th>Phòng ban</th><th>Trạng thái</th><th>Đăng nhập gần nhất</th><th>Thao tác</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
-      '<div class="link-row"><span class="faint" style="font-size:12.5px;align-self:center">Mật khẩu do quản trị viên đặt là mật khẩu tạm: người dùng phải đổi ở lần đăng nhập đầu. Quên mật khẩu: bấm Sửa → đặt mật khẩu mới.</span></div>';
+      '<div class="link-row"><span class="faint" style="font-size:12.5px;align-self:center">Mật khẩu do quản trị viên đặt là mật khẩu tạm: người dùng phải đổi ở lần đăng nhập đầu. Quên mật khẩu: bấm Sửa → đặt mật khẩu mới.</span></div>' + pqAppAccHtml();
   }
   function pqUsersHtml() {
     if (SV) return pqUsersHtmlSv();
     var s = pqS(), sample = S.units.length && S.units.every(function (u) { return u.source === 'sample'; });
-    if (!s.users.length) return '<div class="card empty"><h2>Chưa có tài khoản nào</h2><p>Bắt đầu bằng tài khoản quản trị của anh chị, sau đó thêm tài khoản cho từng người theo vai trò.</p><div class="link-row" style="justify-content:center"><button class="btn btn-primary" data-act="pq-user" data-id="">+ Thêm tài khoản quản trị</button>' + (sample ? '<button class="btn" data-act="pq-mau">Tạo bộ tài khoản mẫu để thử</button>' : '') + '</div></div>';
+    if (!s.users.length) return '<div class="card empty"><h2>Chưa có tài khoản nào</h2><p>Bắt đầu bằng tài khoản quản trị của anh chị, sau đó thêm tài khoản cho từng người theo vai trò.</p><div class="link-row" style="justify-content:center"><button class="btn btn-primary" data-act="pq-user" data-id="">+ Thêm tài khoản quản trị</button>' + (sample ? '<button class="btn" data-act="pq-mau">Tạo bộ tài khoản mẫu để thử</button>' : '') + '</div></div>' + pqAppAccHtml();
     var me = PQ.uid;
     return '<div class="card"><div class="tbl-wrap"><table class="tbl pq-tbl"><thead><tr><th class="l">Họ và tên</th><th>Tên đăng nhập</th><th>Vai trò</th><th>Công ty</th><th>Phòng ban</th><th>Trạng thái</th><th>Đăng nhập gần nhất</th><th>Thao tác</th></tr></thead><tbody>' +
       s.users.map(function (x) {
         var r = pqRole(x.role);
-        return '<tr><td class="l"><b>' + esc(x.name) + '</b>' + (x.id === me ? ' <span class="tag tag-info">Đang dùng</span>' : '') + (x.mau ? ' <span class="tag tag-mute">Mẫu</span>' : '') + '</td><td>' + esc(x.user) + '</td><td>' + (r ? '<span class="tag ' + (r.sys ? 'tag-dom' : 'tag-info') + '">' + esc(r.t) + '</span>' : '<span class="tag tag-bad">Chưa gán</span>') + '</td><td>' + esc(pqDvTxt(x)) + '</td><td>' + esc(x.pb && x.pb.length ? x.pb.join(', ') : 'Tất cả') + '</td>' +
+        return '<tr><td class="l"><b>' + esc(x.name) + '</b>' + (x.id === me ? ' <span class="tag tag-info">Đang dùng</span>' : '') + (x.mau ? ' <span class="tag tag-mute">Mẫu</span>' : '') + '</td><td>' + esc(x.user) + '</td><td>' + pqRoleTag(r, x) + '</td><td>' + esc(pqDvTxt(x)) + '</td><td>' + esc(x.pb && x.pb.length ? x.pb.join(', ') : 'Tất cả') + '</td>' +
           '<td><span class="tag ' + (x.off ? 'tag-bad' : 'tag-ok') + '">' + (x.off ? 'Đang khóa' : 'Hoạt động') + '</span></td><td>' + esc(x.last ? String(x.last).slice(0, 16) : 'Chưa đăng nhập') + '</td>' +
-          '<td class="act"><button class="btn btn-sm" data-act="pq-user" data-id="' + x.id + '">Sửa</button><button class="btn btn-sm" data-act="pq-toggle" data-id="' + x.id + '">' + (x.off ? 'Mở khóa' : 'Khóa') + '</button><button class="btn btn-sm btn-danger-ghost" data-act="pq-del" data-id="' + x.id + '">Xóa</button></td></tr>';
-      }).join('') + '</tbody></table></div></div>' + (sample && !s.users.some(function (x) { return x.mau; }) ? '<div class="link-row"><button class="btn" data-act="pq-mau">Tạo bộ tài khoản mẫu để thử</button></div>' : '');
+          '<td class="act"><button class="btn btn-sm" data-act="pq-user" data-id="' + x.id + '">Sửa</button>' + pqQxBtn(r, x) + '<button class="btn btn-sm" data-act="pq-toggle" data-id="' + x.id + '">' + (x.off ? 'Mở khóa' : 'Khóa') + '</button><button class="btn btn-sm btn-danger-ghost" data-act="pq-del" data-id="' + x.id + '">Xóa</button></td></tr>';
+      }).join('') + '</tbody></table></div></div>' + (sample && !s.users.some(function (x) { return x.mau; }) ? '<div class="link-row"><button class="btn" data-act="pq-mau">Tạo bộ tài khoản mẫu để thử</button></div>' : '') + pqAppAccHtml();
+  }
+  function pqRoleTag(r, x) { var n = pqCusN(x); return r ? '<span class="tag ' + (r.sys ? 'tag-dom' : 'tag-info') + '">' + esc(r.t) + '</span>' + (n && !r.sys ? '<small class="pq-cus">tùy chỉnh ' + n + ' mục</small>' : '') : '<span class="tag tag-bad">Chưa gán</span>'; }
+  function pqQxBtn(r, x) { return r && !r.sys ? '<button class="btn btn-sm" data-act="pq-qx" data-id="' + x.id + '">Phân quyền chi tiết</button>' : ''; }
+  function pqByNv(code) { code = String(code || '').toUpperCase(); return code ? pqS().users.filter(function (x) { return x.nv && String(x.nv).toUpperCase() === code; })[0] || null : null; }
+  function pqAppAccHtml() {
+    if (typeof anvRows !== 'function') return '';
+    var us = pqAllUnits(), rows = anvRows(us).filter(function (r) { return r.st !== 'off' && !pqByNv(r.id); }), multi = us.length > 1;
+    if (typeof anvFetch === 'function') anvFetch();
+    var head = '<div class="pq-sec"><h3>Tài khoản ứng dụng nhân viên đã cấp <span class="tag tag-mute">' + rows.length + '</span></h3><p class="faint">Những người dưới đây chỉ dùng ứng dụng nhân viên (chấm công, đơn, công, lương của mình), chưa vào được trang quản trị. Bấm <b>Gán vai trò</b> để cấp quyền quản trị' + (SV ? ' – người đó đăng nhập bằng Mã nhân viên và mật khẩu tạm anh chị đặt' : ' (bản dùng thử: tạo tài khoản đăng nhập phần mềm cho người đó)') + '. Cấp, khóa tài khoản ứng dụng ở mục <a href="#appnv">Ứng dụng nhân viên</a>.</p></div>';
+    if (!rows.length) return head + '<div class="card card-pad"><p class="muted" style="margin:0">' + (us.some(function (u) { return wfOn(u) || u.source === 'sample'; }) ? 'Chưa có tài khoản ứng dụng nhân viên nào khác, hoặc đang tải trạng thái từ máy chủ…' : 'Chưa kết nối máy chủ chấm công, ứng dụng nhân viên.') + '</p></div>';
+    return head + '<div class="card"><div class="tbl-wrap"><table class="tbl pq-tbl"><thead><tr><th class="l">Họ và tên</th><th>Mã NV</th><th>Phòng ban</th>' + (multi ? '<th>Công ty</th>' : '') + '<th>Ứng dụng nhân viên</th><th>Vai trò quản trị</th><th>Thao tác</th></tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr><td class="l"><b>' + esc(r.e['Họ và tên'] || r.id) + '</b></td><td class="mono">' + esc(r.id) + '</td><td>' + esc(r.e['Phòng ban'] || '') + '</td>' + (multi ? '<td>' + esc(shortUnit(r.u.name)) + '</td>' : '') + '<td>' + (r.st === 'lock' ? '<span class="tag tag-mute">Đã khóa</span>' : '<span class="tag tag-ok">Đang dùng</span>') + '</td><td><span class="faint">Chỉ dùng ứng dụng</span></td><td class="act"><button class="btn btn-sm btn-primary" data-act="pq-gan" data-id="' + r.u.id + '|' + esc(r.id) + '">Gán vai trò</button></td></tr>'; }).join('') + '</tbody></table></div></div>';
   }
   function pqRolesHtml() {
     var s = pqS(), mods = pqMods(), gName = {}; GROUPS.forEach(function (g) { gName[g.id] = g.t; });
@@ -22016,11 +22039,11 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (!pqOnlyAdmin()) return;
     var s = pqS(), x = id ? pqUser(id) : null, units = pqAllUnits(), first = !SV && !x && !pqAdmins().length;
     if (SV) return pqUserSv(x, units, preset);
-    var cur = x || { name: '', user: '', role: first ? 'qt' : (preset || (s.roles.filter(function (r) { return !r.sys; })[0] || s.roles[0]).id), dv: 'all', pb: [] };
+    var cur = x || { name: '', user: '', role: first ? 'qt' : (preset || (s.roles.filter(function (r) { return !r.sys; })[0] || s.roles[0]).id), dv: 'all', pb: [] }, pre = !x && PQ.preNv; PQ.preNv = null;
     var nvs = []; units.forEach(function (u) { ((u.data && u.data.NV) || []).forEach(function (e2) { if (e2['Họ và tên']) nvs.push({ c: e2['Mã NV'], n: e2['Họ và tên'], p: e2['Phòng ban'] || '', u: u }); }); });
     var body = (first ? '<div class="notice" style="margin-bottom:12px">' + ic('info') + '<div>Tài khoản đầu tiên là tài khoản <b>Quản trị</b>. Ghi nhớ mật khẩu này: cần có nó để bật phân quyền và đăng nhập.</div></div>' : '') +
       '<div class="form-grid">' +
-      (nvs.length && !x ? '<div class="field" style="grid-column:1/-1"><label for="pqNv">Lấy thông tin từ danh sách nhân sự (không bắt buộc)</label><select class="input" id="pqNv"><option value="">— Tự nhập —</option>' + nvs.map(function (n, i) { return '<option value="' + i + '">' + esc(n.n) + ' · ' + esc(n.p) + (units.length > 1 ? ' · ' + esc(shortUnit(n.u.name)) : '') + '</option>'; }).join('') + '</select></div>' : '') +
+      (nvs.length && !x ? '<div class="field" style="grid-column:1/-1"><label for="pqNv">Lấy thông tin từ danh sách nhân sự (không bắt buộc)</label><select class="input" id="pqNv"><option value="">— Tự nhập —</option>' + nvs.map(function (n, i) { return '<option value="' + i + '"' + (pre && String(n.c) === pre.code && n.u.id === pre.uid ? ' selected' : '') + '>' + esc(n.n) + ' · ' + esc(n.p) + (units.length > 1 ? ' · ' + esc(shortUnit(n.u.name)) : '') + '</option>'; }).join('') + '</select></div>' : '') +
       '<div class="field"><label for="pqName">Họ và tên *</label><input class="input" id="pqName" maxlength="60" value="' + esc(cur.name) + '"></div>' +
       '<div class="field"><label for="pqUn">Tên đăng nhập * (chữ thường, số, dấu chấm)</label><input class="input" id="pqUn" maxlength="30" autocapitalize="none" spellcheck="false" value="' + esc(cur.user) + '"></div>' +
       '<div class="field"><label for="pqRl">Vai trò *</label><select class="input" id="pqRl"' + (first ? ' disabled' : '') + '>' + s.roles.map(function (r) { return '<option value="' + r.id + '"' + (r.id === cur.role ? ' selected' : '') + '>' + esc(r.t) + '</option>'; }).join('') + '</select></div>' +
@@ -22028,7 +22051,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       '<div class="field" style="grid-column:1/-1"><label>Phòng ban được xem <span id="pqPbNote" class="faint"></span></label><div class="pq-chk" id="pqPb"></div></div>' +
       '<div class="field"><label for="pqP1">' + (x ? 'Mật khẩu mới (để trống nếu giữ nguyên)' : 'Mật khẩu * (từ 8 ký tự, có chữ và số)') + '</label><input class="input" id="pqP1" type="password" autocomplete="new-password"></div>' +
       '<div class="field"><label for="pqP2">Nhập lại mật khẩu</label><input class="input" id="pqP2" type="password" autocomplete="new-password"></div></div>' +
-      '<p id="pqUMsg" class="tl-msg"></p><div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Hủy</button><button class="btn btn-primary" id="pqUOk">' + (x ? 'Lưu thay đổi' : 'Tạo tài khoản') + '</button></div>';
+      '<p id="pqUMsg" class="tl-msg"></p><div id="pqQxH" class="pq-qxh"></div><div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Hủy</button><button class="btn" id="pqUQx">Lưu và chỉnh quyền chi tiết</button><button class="btn btn-primary" id="pqUOk">' + (x ? 'Lưu thay đổi' : 'Tạo tài khoản') + '</button></div>';
     var m = modal(x ? 'Sửa tài khoản' : 'Thêm tài khoản', x ? x.user : 'Tài khoản vào phần mềm quản trị', body);
     function dvSel() { var all = $('#pqDv input[value=all]', m).checked; return all ? null : $$('#pqDv input:checked', m).map(function (i) { return i.value; }); }
     function drawPb(keep) {
@@ -22036,7 +22059,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       $('#pqPb', m).innerHTML = '<label><input type="checkbox" value="*"' + (!chosen.filter(function (c) { return c !== '*' && list.indexOf(c) >= 0; }).length ? ' checked' : '') + '> Tất cả phòng ban</label>' + list.map(function (d) { return '<label><input type="checkbox" value="' + esc(d) + '"' + (chosen.indexOf(d) >= 0 ? ' checked' : '') + '> ' + esc(d) + '</label>'; }).join('');
       $('#pqPbNote', m).textContent = r && r.sys ? '' : r && r.pb ? '· vai trò này bắt buộc chọn phòng ban' : '· chọn phòng ban thì tài khoản chỉ xem, không sửa';
     }
-    drawPb(cur.pb || []);
+    drawPb(cur.pb || []); pqQxHint(m, x);
     $('#pqDv', m).addEventListener('change', function (ev) { var t = ev.target; if (t.value === 'all' && t.checked) $$('#pqDv input', m).forEach(function (i) { if (i.value !== 'all') i.checked = false; }); else if (t.checked) $('#pqDv input[value=all]', m).checked = false; if (!$$('#pqDv input:checked', m).length) $('#pqDv input[value=all]', m).checked = true; drawPb(); });
     $('#pqPb', m).addEventListener('change', function (ev) { var t = ev.target; if (t.value === '*' && t.checked) $$('#pqPb input', m).forEach(function (i) { if (i.value !== '*') i.checked = false; }); else if (t.checked) $('#pqPb input[value="*"]', m).checked = false; if (!$$('#pqPb input:checked', m).length) $('#pqPb input[value="*"]', m).checked = true; });
     $('#pqRl', m).addEventListener('change', function () { drawPb(); });
@@ -22045,6 +22068,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       var w = HR.stripAcc(n.n).toLowerCase().replace(/[^a-z\s]/g, '').trim().split(/\s+/); $('#pqUn', m).value = (w[w.length - 1] + '.' + w.slice(0, -1).map(function (p) { return p.charAt(0); }).join('')).replace(/\.$/, '');
       var r = pqRole($('#pqRl', m).value); if (r && r.pb && n.p) { $$('#pqDv input', m).forEach(function (i) { i.checked = i.value === n.u.id; }); drawPb([n.p]); }
     });
+    if (pre && nvSel && nvSel.value !== '') nvSel.dispatchEvent(new Event('change'));
     $('#pqUOk', m).addEventListener('click', function () {
       var msg = $('#pqUMsg', m), name = $('#pqName', m).value.trim(), un = $('#pqUn', m).value.trim().toLowerCase(), role = $('#pqRl', m).value, r = pqRole(role), p1 = $('#pqP1', m).value, p2 = $('#pqP2', m).value;
       var ids = dvSel(), pb = $$('#pqPb input:checked', m).map(function (i) { return i.value; }).filter(function (v) { return v !== '*'; });
@@ -22056,20 +22080,20 @@ if (typeof module !== 'undefined') module.exports = XW;
       if (x && r && !r.sys && s.on && pqAdmins().length === 1 && pqAdmins()[0] === x) { msg.textContent = 'Đây là tài khoản quản trị duy nhất, không đổi sang vai trò khác được'; return; }
       var o = x || { id: 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) };
       if (x && x.mau && (p1 || x.user !== un)) delete o.mau;
-      o.name = name; o.user = un; o.role = role; o.pb = r && r.sys ? [] : pb;
+      o.name = name; o.user = un; o.role = role; o.pb = r && r.sys ? [] : pb; if (nvSel && nvSel.value !== '' && nvs[+nvSel.value] && nvs[+nvSel.value].c) o.nv = String(nvs[+nvSel.value].c);
       o.dv = ids ? units.filter(function (u) { return ids.indexOf(u.id) >= 0; }).map(function (u) { return { id: u.id, name: u.name }; }) : 'all';
       var btn = this; btn.disabled = true;
       (p1 ? pqSetPw(o, p1) : Promise.resolve()).then(function () {
         if (!x) s.users.push(o); pqRaw(); log('Phân quyền: ' + (x ? 'sửa' : 'thêm') + ' tài khoản ' + un + ' (' + (r ? r.t : '') + ')'); m.close(); toast(x ? 'Đã lưu tài khoản ' + un : 'Đã tạo tài khoản ' + un, 'ok');
-        if (o.id === PQ.uid) { S.settings.user = { name: o.name }; pqScope(); } render();
-      }, function (er) { btn.disabled = false; msg.textContent = er && er.message || 'Chưa lưu được'; });
+        if (o.id === PQ.uid) { S.settings.user = { name: o.name }; pqScope(); } render(); pqQxAfter(o);
+      }, function (er) { PQ.afterQx = 0; btn.disabled = false; msg.textContent = er && er.message || 'Chưa lưu được'; });
     });
   };
   /* 0.8.1 – thêm / sửa tài khoản khi chạy trên máy chủ: tài khoản = Mã nhân viên, mật khẩu lưu trên máy chủ (không lưu trong dữ liệu phần mềm) */
   function pqUserSv(x, units, preset) {
     var s = pqS(), unlock = x && x.off && PQ.unlock === x.id; PQ.unlock = null;
     var t0 = x && x.nv && SV.tk && SV.tk[x.nv], needPw = !x || !x.nv || unlock || (SV.tk && (!t0 || !t0.co_mk || !t0.qt));
-    var cur = x || { name: '', role: preset || (s.roles.filter(function (r) { return !r.sys; })[0] || s.roles[0]).id, dv: 'all', pb: [] };
+    var cur = x || { name: '', role: preset || (s.roles.filter(function (r) { return !r.sys; })[0] || s.roles[0]).id, dv: 'all', pb: [], nv: PQ.preNv ? PQ.preNv.code : '' }; PQ.preNv = null;
     var taken = {}; s.users.forEach(function (o) { if (o.nv && o !== x) taken[o.nv] = 1; });
     var nvs = []; units.forEach(function (u) { ((u.data && u.data.NV) || []).forEach(function (e2) { if (e2['Họ và tên'] && e2['Mã NV'] && HR.staffState(e2, HR.isoToday(), {}) !== 'left') nvs.push({ c: String(e2['Mã NV']), n: e2['Họ và tên'], p: e2['Phòng ban'] || '', u: u }); }); });
     var body = (unlock ? '<div class="notice warn" style="margin-bottom:12px">' + ic('info') + '<div>Mở khóa: đặt mật khẩu tạm mới cho tài khoản này. Người dùng phải đổi ở lần đăng nhập đầu.</div></div>' : '') + '<div class="form-grid">' +
@@ -22080,7 +22104,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       '<div class="field"><label for="pqP1">' + (needPw ? 'Mật khẩu tạm * (từ 8 ký tự, có chữ và số)' : 'Đặt lại mật khẩu (để trống nếu giữ nguyên)') + '</label><input class="input" id="pqP1" type="password" autocomplete="new-password"></div>' +
       '<div class="field"><label for="pqP2">Nhập lại mật khẩu</label><input class="input" id="pqP2" type="password" autocomplete="new-password"></div></div>' +
       '<p class="faint" style="font-size:12.5px;margin:8px 0 0">Báo mật khẩu tạm riêng cho người đó. Ở lần đăng nhập đầu (trên ứng dụng hoặc trang quản trị), họ phải đặt mật khẩu của riêng mình.</p>' +
-      '<p id="pqUMsg" class="tl-msg"></p><div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Hủy</button><button class="btn btn-primary" id="pqUOk">' + (unlock ? 'Mở khóa' : x ? 'Lưu thay đổi' : 'Tạo tài khoản') + '</button></div>';
+      '<p id="pqUMsg" class="tl-msg"></p><div id="pqQxH" class="pq-qxh"></div><div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Hủy</button><button class="btn" id="pqUQx">Lưu và chỉnh quyền chi tiết</button><button class="btn btn-primary" id="pqUOk">' + (unlock ? 'Mở khóa' : x ? 'Lưu thay đổi' : 'Tạo tài khoản') + '</button></div>';
     var m = modal(x ? (unlock ? 'Mở khóa tài khoản' : 'Sửa tài khoản') : 'Thêm tài khoản', x ? (x.nv || x.user) : 'Tài khoản chung: ứng dụng nhân viên và trang quản trị', body);
     function dvSel() { var all = $('#pqDv input[value=all]', m).checked; return all ? null : $$('#pqDv input:checked', m).map(function (i) { return i.value; }); }
     function drawPb(keep) {
@@ -22088,11 +22112,12 @@ if (typeof module !== 'undefined') module.exports = XW;
       $('#pqPb', m).innerHTML = '<label><input type="checkbox" value="*"' + (!chosen.filter(function (c) { return c !== '*' && list.indexOf(c) >= 0; }).length ? ' checked' : '') + '> Tất cả phòng ban</label>' + list.map(function (d) { return '<label><input type="checkbox" value="' + esc(d) + '"' + (chosen.indexOf(d) >= 0 ? ' checked' : '') + '> ' + esc(d) + '</label>'; }).join('');
       $('#pqPbNote', m).textContent = r && r.sys ? '' : r && r.pb ? '· vai trò này bắt buộc chọn phòng ban' : '· chọn phòng ban thì tài khoản chỉ xem, không sửa';
     }
-    drawPb(cur.pb || []);
+    drawPb(cur.pb || []); pqQxHint(m, x);
     $('#pqDv', m).addEventListener('change', function (ev) { var t = ev.target; if (t.value === 'all' && t.checked) $$('#pqDv input', m).forEach(function (i) { if (i.value !== 'all') i.checked = false; }); else if (t.checked) $('#pqDv input[value=all]', m).checked = false; if (!$$('#pqDv input:checked', m).length) $('#pqDv input[value=all]', m).checked = true; drawPb(); });
     $('#pqPb', m).addEventListener('change', function (ev) { var t = ev.target; if (t.value === '*' && t.checked) $$('#pqPb input', m).forEach(function (i) { if (i.value !== '*') i.checked = false; }); else if (t.checked) $('#pqPb input[value="*"]', m).checked = false; if (!$$('#pqPb input:checked', m).length) $('#pqPb input[value="*"]', m).checked = true; });
     $('#pqRl', m).addEventListener('change', function () { drawPb(); });
     $('#pqNv', m).addEventListener('change', function () { var n = nvs[+this.value], r = pqRole($('#pqRl', m).value); if (n && r && r.pb && n.p) { $$('#pqDv input', m).forEach(function (i) { i.checked = i.value === n.u.id; }); drawPb([n.p]); } });
+    if (!x && cur.nv) $('#pqNv', m).dispatchEvent(new Event('change'));
     $('#pqUOk', m).addEventListener('click', function () {
       var msg = $('#pqUMsg', m), sel = $('#pqNv', m).value, n = sel === '' ? null : nvs[+sel], role = $('#pqRl', m).value, r = pqRole(role), p1 = $('#pqP1', m).value, p2 = $('#pqP2', m).value;
       var code = x && x.nv ? x.nv : n ? n.c : '', ids = dvSel(), pb = $$('#pqPb input:checked', m).map(function (i) { return i.value; }).filter(function (v) { return v !== '*'; });
@@ -22109,10 +22134,55 @@ if (typeof module !== 'undefined') module.exports = XW;
       svTkPush(o, r, p1 || '').then(function () {
         if (!x) s.users.push(o); pqRaw(); log('Phân quyền: ' + (x ? (unlock ? 'mở khóa' : 'sửa') : 'thêm') + ' tài khoản ' + code + ' (' + (r ? r.t : '') + ')' + (p1 ? ' – đặt mật khẩu tạm' : '')); m.close();
         toast(x ? (unlock ? 'Đã mở khóa tài khoản ' + code : 'Đã lưu tài khoản ' + code) : 'Đã tạo tài khoản ' + code, 'ok', p1 ? 'Báo mật khẩu tạm riêng cho ' + o.name + '. Họ đăng nhập ứng dụng nhân viên hoặc trang quản trị bằng mã ' + code + ', rồi đổi mật khẩu.' : '');
-        pqScope(); render();
-      }, function (er) { o.off = wasOff; btn.disabled = false; msg.textContent = er && er.message || 'Chưa lưu được'; });
+        pqScope(); render(); pqQxAfter(o);
+      }, function (er) { PQ.afterQx = 0; o.off = wasOff; btn.disabled = false; msg.textContent = er && er.message || 'Chưa lưu được'; });
     });
   }
+  /* 1.0.5: quyền theo tài khoản mặc định theo vai trò, có thể tùy chỉnh từng tính năng và quyền duyệt */
+  function pqQxHint(m, x) {
+    var h = $('#pqQxH', m), b = $('#pqUQx', m), sel = $('#pqRl', m); if (!h || !sel) return;
+    var upd = function () { var r = pqRole(sel.value), n = x && x.role === sel.value ? pqCusN(x) : 0; b.hidden = !r || !!r.sys;
+      h.innerHTML = !r ? '' : r.sys ? '<span class="faint">Vai trò ' + esc(r.t) + ' có toàn quyền.</span>' : ic('info', 15) + '<span>Quyền mặc định theo vai trò <b>' + esc(r.t) + '</b>' + (n ? ', người này đang <b>tùy chỉnh ' + n + ' mục</b>' : '') + '. Muốn điều chỉnh riêng cho người này: bấm <b>Lưu và chỉnh quyền chi tiết</b>.</span>' + (x && x.role !== sel.value && pqCusN(x) ? '<br><span class="down">Đổi vai trò: phần tùy chỉnh cũ vẫn giữ, xem lại ở bước chỉnh chi tiết.</span>' : ''); };
+    sel.addEventListener('change', upd); upd();
+    b.addEventListener('click', function () { PQ.afterQx = 1; var ok = $('#pqUOk', m); ok.click(); if (document.body.contains(m) && !ok.disabled) PQ.afterQx = 0; });
+  }
+  function pqQxAfter(o) { if (!PQ.afterQx) return; PQ.afterQx = 0; var r = pqRole(o.role); if (r && !r.sys) setTimeout(function () { ACTS['pq-qx'](null, o.id); }, 60); }
+  ACTS['pq-gan'] = function (a, key) {
+    if (!pqOnlyAdmin()) return; var k = String(key).split('|'), uid = k[0], code = k.slice(1).join('|'), x = pqByNv(code);
+    if (x) { ACTS['pq-user'](null, x.id); return; }
+    PQ.preNv = { uid: uid, code: code }; ACTS['pq-user'](null, '');
+  };
+  ACTS['pq-qx'] = function (a, id) {
+    if (!pqOnlyAdmin()) return; var x = pqUser(id), r = x && pqRole(x.role); if (!x) return;
+    if (!r) { toast('Gán vai trò cho tài khoản này trước', 'warn'); return; }
+    if (r.sys) { toast('Vai trò Quản trị có toàn quyền – không cần chỉnh chi tiết', 'info'); return; }
+    var mods = pqMods(), gName = {}, last = null, qx = Object.assign({}, x.qx || {}), ax = Object.assign({}, x.ax || {}), L = { '': 'Không vào', x: 'Chỉ xem', s: 'Được sửa' };
+    GROUPS.forEach(function (g) { gName[g.id] = g.t; });
+    function sel(id0, rv, v) { var o = function (val, t) { return '<option value="' + val + '"' + (v === val ? ' selected' : '') + '>' + t + '</option>'; }; return '<select class="input pq-qs' + (v !== '_' ? ' cus' : '') + '" data-qm="' + id0 + '">' + o('_', 'Theo vai trò (' + L[rv] + ')') + o('', 'Không vào') + o('x', 'Chỉ xem') + o('s', 'Được sửa') + '</select>'; }
+    var h = '<div class="pq-qx-top"><span>Vai trò: <b>' + esc(r.t) + '</b></span><span class="faint">Ô để "Theo vai trò" thì đi theo quyền của vai trò (đổi vai trò là đổi theo). Ô chọn khác thì chỉ áp cho riêng tài khoản này.</span></div>' +
+      ((x.pb || []).length ? '<div class="notice warn" style="margin:8px 0">' + ic('info') + '<div>Tài khoản giới hạn theo phòng ban (' + esc(x.pb.join(', ')) + ') chỉ xem trên phần mềm – chọn "Được sửa" vẫn tính là chỉ xem.</div></div>' : '') +
+      '<div class="tbl-wrap pq-qx-w"><table class="tbl pq-tbl"><thead><tr><th class="l">Tính năng</th><th>Quyền của tài khoản này</th></tr></thead><tbody>';
+    mods.forEach(function (m0) {
+      if (m0.g !== last) { last = m0.g; h += '<tr class="grp"><td colspan="2">' + esc(gName[m0.g] || 'Khác') + '</td></tr>'; }
+      var par = m0.p && modOf(m0.p), rv = (r.q || {})[m0.id] || '';
+      h += '<tr><td class="l">' + (par ? '<small>' + esc(par.t) + ' › </small>' : '') + esc(m0.t) + '</td><td>' + sel(m0.id, rv, Object.prototype.hasOwnProperty.call(qx, m0.id) ? qx[m0.id] : '_') + '</td></tr>';
+    });
+    h += '<tr class="grp"><td colspan="2">Quyền duyệt, chốt số liệu</td></tr>' + PQ_ACT.map(function (a2) { var rv = (r.a || {})[a2[0]] ? 1 : 0, v = Object.prototype.hasOwnProperty.call(ax, a2[0]) ? String(ax[a2[0]] ? 1 : 0) : '_';
+      return '<tr><td class="l">' + a2[1] + '</td><td><select class="input pq-qs' + (v !== '_' ? ' cus' : '') + '" data-qa="' + a2[0] + '"><option value="_"' + (v === '_' ? ' selected' : '') + '>Theo vai trò (' + (rv ? 'Có' : 'Không') + ')</option><option value="1"' + (v === '1' ? ' selected' : '') + '>Có</option><option value="0"' + (v === '0' ? ' selected' : '') + '>Không</option></select></td></tr>'; }).join('');
+    h += '</tbody></table></div><div class="link-row" style="justify-content:space-between;margin-top:12px"><button class="btn btn-danger-ghost" id="pqQxReset">Bỏ hết tùy chỉnh (về đúng vai trò)</button><span><button class="btn" data-close>Hủy</button> <button class="btn btn-primary" id="pqQxOk">Lưu phân quyền</button></span></div>';
+    var m = modal('Phân quyền chi tiết · ' + (x.name || x.user), (x.nv || x.user) + ' · ' + r.t, h, true);
+    m.addEventListener('change', function (ev) { var t = ev.target; if (t.classList && t.classList.contains('pq-qs')) t.classList.toggle('cus', t.value !== '_'); });
+    function save(clear) {
+      var q2 = {}, a3 = {};
+      if (!clear) { $$('[data-qm]', m).forEach(function (el) { if (el.value !== '_') q2[el.getAttribute('data-qm')] = el.value; }); $$('[data-qa]', m).forEach(function (el) { if (el.value !== '_') a3[el.getAttribute('data-qa')] = +el.value; }); }
+      if (Object.keys(q2).length) x.qx = q2; else delete x.qx; if (Object.keys(a3).length) x.ax = a3; else delete x.ax;
+      pqRaw(); var n = pqCusN(x); log('Phân quyền: ' + (n ? 'chỉnh chi tiết ' + n + ' mục' : 'bỏ tùy chỉnh') + ' cho tài khoản ' + (x.nv || x.user)); m.close();
+      toast(n ? 'Đã lưu phân quyền riêng cho ' + (x.name || x.user) : 'Tài khoản ' + (x.name || x.user) + ' về đúng quyền của vai trò ' + r.t, 'ok', SV ? 'Áp dụng ở lần đăng nhập, tải lại tiếp theo của người đó.' : '');
+      pqScope(); render();
+    }
+    $('#pqQxOk', m).addEventListener('click', function () { save(false); });
+    $('#pqQxReset', m).addEventListener('click', function () { save(true); });
+  };
   ACTS['pq-toggle'] = function (a, id) {
     if (!pqOnlyAdmin()) return; var s = pqS(), x = pqUser(id); if (!x) return;
     if (SV) { // 0.8.1: khóa = bỏ quyền quản trị trên máy chủ (người đó vẫn dùng ứng dụng nhân viên bằng mã PIN); mở khóa = đặt mật khẩu tạm mới

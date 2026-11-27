@@ -1155,7 +1155,7 @@ async function qtScope(db, U) {
   if (role.sys) return FULL;
   const dv = su && Array.isArray(su.dv) ? su.dv.map(d => String((d && d.id) || '')).filter(Boolean) : 'all';
   const pb = su && Array.isArray(su.pb) ? su.pb.map(v => String(v)).filter(Boolean) : [];
-  const q = role.q && typeof role.q === 'object' ? role.q : {};
+  const q = Object.assign({}, role.q && typeof role.q === 'object' ? role.q : {}, su && su.qx && typeof su.qx === 'object' ? su.qx : {}); // 1.0.5: per-user overrides take precedence over role permissions
   return { sys: 0, role: role.id, w: !pb.length && Object.keys(q).some(k => q[k] === 's'), dv, pb, q,
     can: mods => !pb.length && mods.some(m => q[m] === 's'),
     unitOk: id => dv === 'all' || dv.includes(String(id)) };
@@ -1200,7 +1200,7 @@ const QT_SYNC_MODS = {
   'ho-so': ['ccwifi', 'nv', 'hoso', 'hd', 'appnv'], 'kho-file': ['ccwifi', 'nv', 'hoso', 'hd'], 'kho-xoa': ['ccwifi', 'nv', 'hoso', 'hd'], cham: ['ccwifi', 'cc'], 'cham-xoa': ['ccwifi', 'cc']
 };
 // phần phân quyền dùng để so: chỉ quản trị viên được đổi (bỏ các trường thay đổi khi dùng bình thường, như lần đăng nhập gần nhất)
-function pqCore(pq) { if (!pq) return null; return { on: !!pq.on, roles: pq.roles || [], users: (pq.users || []).map(u => ({ id: u.id, nv: u.nv || '', user: u.user, role: u.role, dv: u.dv, pb: u.pb, off: !!u.off })) }; }
+function pqCore(pq) { if (!pq) return null; return { on: !!pq.on, roles: pq.roles || [], users: (pq.users || []).map(u => ({ id: u.id, nv: u.nv || '', user: u.user, role: u.role, dv: u.dv, pb: u.pb, off: !!u.off, qx: u.qx || null, ax: u.ax || null })) }; }
 /* Bản thử: ai trong dữ liệu mẫu có quyền quản trị (để thử mục Quản trị trên app). Mở Phần mềm quản lý nhân sự toàn diện bản thử với vai trò tương ứng (xem thử theo vai trò). */
 const DEMO_QT = { DS001: 'gd', SG001: 'gd', DS002: 'kt', DS004: 'ns', SG002: 'ns' }, DEMO_QT_T = { gd: 'Giám đốc', kt: 'Kế toán lương', ns: 'Nhân sự', tbp: 'Trưởng bộ phận' };
 function demoQtOf(ma) { const r = DEMO_QT[ma] || (demoFind(ma) && (demoFind(ma).hs || {}).truong ? 'tbp' : ''); return r ? { r, t: DEMO_QT_T[r], sys: 0 } : null; }
