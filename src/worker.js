@@ -2017,7 +2017,8 @@ async function api(req, env, url) {
   if (p === '/api/don' && req.method === 'POST') {
     const s = await session(db, req, 'nv'); if (!s) return bad('Phiên đăng nhập đã hết. Đăng nhập lại.', 401);
     if (body.huy) return bad('Đơn đã gửi chỉ xem được. Liên hệ người duyệt nếu cần thay đổi.');
-    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE];
+    const HS0 = await hsOf(db, s.nv.ma, demo), DHX = HS0 && HS0.dh || {};
+    const LOAI = ['Nghỉ phép năm', 'Nghỉ việc riêng có lương', 'Nghỉ ốm', 'Nghỉ thai sản', 'Nghỉ không lương', 'Nghỉ phép nửa ngày', 'Công tác', WEEKEND_DUTY_TYPE].concat(Object.keys(DHX).filter(k => DHX[k] && DHX[k].c));
     const loai = LOAI.includes(body.loai) ? body.loai : null, ly = String(body.ly_do || '').trim().slice(0, 300), buoi = String(body.buoi || ''), anh = requestPhotos(body.anh);
     let tu = String(body.tu || ''), den = String(body.den || body.tu || ''), weekendDates = null;
     if (!loai) return bad('Chọn loại nghỉ.');
@@ -2032,7 +2033,7 @@ async function api(req, env, url) {
     if (den > isoVN(now + 366 * 864e5) || tu < isoVN(now - 62 * 864e5)) return bad('Ngày nghỉ chỉ trong khoảng 2 tháng trước đến 1 năm tới.');
     const trung = await db.prepare("SELECT so FROM don WHERE ma = ? AND trang_thai IN ('Chờ duyệt','Đang chờ duyệt','Đã duyệt') AND tu <= ? AND den >= ?").bind(s.nv.ma, den, tu).first();
     if (trung) return bad('Đã có đơn ' + trung.so + ' trùng ngày.');
-    const so = 'DT-' + isoVN(now).replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase(), HS = await hsOf(db, s.nv.ma, demo);
+    const so = 'DT-' + isoVN(now).replace(/-/g, '').slice(2) + '-' + randHex(2).toUpperCase(), HS = HS0;
     if (HS && HS.dh && HS.dh[loai] && HS.dh[loai].off) return bad('Công ty không áp dụng loại nghỉ "' + loai + '". Báo quản lý trực tiếp nếu cần.'); // 20/11/2026: loại nghỉ đã tắt
     { const DH = HS && HS.dh && HS.dh[loai]; // 16/11 11:04 anh: thời hạn gửi đơn nghỉ theo từng loại (Thiết lập chấm công → Đơn xin)
       if (DH && (DH.k === 'truoc' || DH.k === 'bu')) { const ca = await caNgay(db, cfg, HS, s.nv.ma, tu), st0 = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN + (ca ? hm2min(ca.vao) : 480) * 60e3, m = Math.max(0, +DH.m || 0), tt = m % 1440 ? (m >= 1440 ? Math.floor(m / 1440) + ' ngày ' : '') + (m % 1440 % 60 ? Math.round(m % 1440 / 6) / 10 + ' giờ' : (m % 1440) / 60 + ' giờ') : m / 1440 + ' ngày';
