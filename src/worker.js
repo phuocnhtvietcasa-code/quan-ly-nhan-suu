@@ -1554,8 +1554,7 @@ async function api(req, env, url) {
       if (st.length) await db.batch(st);
       await ccCalcQueue(db, cfg, months);
       if (bao.length) later(req, Promise.all(bao.map(b => requestNotice(db, cfg, url.origin, false, [b.ma], b.t, b.b, b.so, req, now))));
-      const cham = await syncMonthPunches(db, ym), cong = await syncMonthCong(db, ym);
-      return jc({ ok: true, n: st.length, list: cong, cong, cham });
+      return jc({ ok: true, n: st.length });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
       const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [], recalcWeekend = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
