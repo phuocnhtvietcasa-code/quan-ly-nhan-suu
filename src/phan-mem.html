@@ -10991,11 +10991,11 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   // Áp loại ký hiệu vào ô: ngày công, nghỉ hưởng lương, BHXH, không lương
   function bcApplyCode(s, c) {
-    var d = bcCode(s, c.k); if (d && c.k !== '?' && String(c.k) !== String(d.k)) c.k = d.k; c.type = d ? d.type : (c.k ? 'other' : ''); c.kp = d ? (d.kp ? 1 : 0) : (String(c.k).toUpperCase() === 'KP' ? 1 : 0); c.paid = c.bh = c.unpaid = 0;
+    var manualCong = c.manual && c.cong != null ? +c.cong : null, d = bcCode(s, c.k); if (d && c.k !== '?' && String(c.k) !== String(d.k)) c.k = d.k; c.type = d ? d.type : (c.k ? 'other' : ''); c.kp = d ? (d.kp ? 1 : 0) : (String(c.k).toUpperCase() === 'KP' ? 1 : 0); c.paid = c.bh = c.unpaid = 0;
     if (!c.k || c.k === '?') return;
     var w = d ? +d.w : 0;
     if (c.type === 'work') { if (c.cong == null) c.cong = c.kind === 'half' ? Math.min(w, 0.5) : w; }
-    else { c.cong = 0; if (c.type === 'paid' || c.type === 'hol') c.paid = c.kind === 'half' ? Math.min(w, 0.5) : w; else if (c.type === 'bh') c.bh = 1; else if (c.type === 'unpaid') c.unpaid = 1; }
+    else { c.cong = manualCong == null ? 0 : bcTrunc(manualCong, 3); if (c.type === 'paid' || c.type === 'hol') c.paid = c.kind === 'half' ? Math.min(w, 0.5) : w; else if (c.type === 'bh') c.bh = 1; else if (c.type === 'unpaid') c.unpaid = 1; }
   }
   function bcTrunc(v, n) { var m = Math.pow(10, n); return Math.trunc((+v || 0) * m) / m; }
   function bcHoursTxt(v) { return v == null ? '' : (+v || 0).toFixed(2); }
@@ -11047,6 +11047,26 @@ if (typeof module !== 'undefined') module.exports = XW;
     return ccCalcDay(s, seg, tin, tout, 'work', 'h', who, R);
   }
   // Tính cả tháng của 1 công ty (có bộ nhớ đệm)
+  function bcApprovedCalc(s, u, sh, iso, tin, tout, kind, dayK, who, R, session) {
+    var actual = session ? bcSessionCalc(s, sh, { tin: tin, tout: tout }, session, who, R) : ccCalcDay(s, sh, tin, tout, kind, dayK, who, R), out = actual, i = shiftInfo(sh), lateOk = false, earlyOk = false, changed = false;
+    if (!actual || !u || !i) return { r: out, actual: actual, lateOk: false, earlyOk: false };
+    var reqs = xmList(u).filter(function (x) { return x.ma === (who && who.id || who && who.ma || '') && x.ngay === iso && x.trang_thai === 'Đã duyệt'; });
+    if (!reqs.length) return { r: out, actual: actual, lateOk: false, earlyOk: false };
+    var cfg0 = xmCfg(s, u), start = i.a, end = i.b, ca = i.ba !== null ? i.ba : Math.round((i.a + i.b) / 2), cb = i.ba !== null ? i.bb : Math.round((i.a + i.b) / 2);
+    if (session === 'sang') end = ca; else if (session === 'chieu') start = cb;
+    var ti2 = tin, to2 = tout;
+    reqs.forEach(function (q) {
+      var k = q.kieu, gx = ccMin(q.gio), ax = ccMin(k === 'muon' ? tin : tout), valid = gx === null || ax === null || (k === 'muon' ? ax - gx <= (+R.lateGrace || 0) : gx - ax <= (+R.earlyGrace || 0));
+      if (k === 'muon' && actual.late && valid) { if (cfg0.tinh === 'dung') { ti2 = ccHM(start); changed = true; } else lateOk = true; }
+      if (k === 'som' && actual.early && valid) { if (cfg0.tinh === 'dung') { to2 = ccHM(end); changed = true; } else earlyOk = true; }
+    });
+    if (changed) {
+      var waived = session ? bcSessionCalc(s, sh, { tin: ti2, tout: to2 }, session, who, R) : ccCalcDay(s, sh, ti2, to2, kind, dayK, who, R);
+      waived.worked = actual.worked; waived.workedMinutes = actual.workedMinutes; waived.cong = actual.cong; waived.ot = actual.ot; waived.otRaw = actual.otRaw; waived.otWait = actual.otWait; waived.night = actual.night; waived.otNt = actual.otNt;
+      if (ti2 !== tin) waived.late = 0; if (to2 !== tout) waived.early = 0; out = waived;
+    }
+    return { r: out, actual: actual, lateOk: lateOk, earlyOk: earlyOk };
+  }
   function bcMonth(u, ym, sourceMode) {
     var s = ccOf(u), x = bcX(u), LC = lcOf(u), SGK = bcSynEnd(u), SG = SGK.slice(0, 10), TD = HR.isoToday(), fileOnly = sourceMode === 'file', deviceOnly = sourceMode === 'device', modeKey = fileOnly ? 'file' : deviceOnly ? 'device' : sourceMode === 'with-device' ? 'with-device' : sourceMode === 'wifi' ? 'wifi' : 'all', key = ym + '|' + modeKey + '|' + (u.ver || 0) + '|' + (u.ccset ? u.ccset.at : '') + '|' + x.v + '|' + (u.wf && (u.wf.excludeDevice === true || u.wf.includeDevice === false) ? 'no-device' : 'device') + '|' + refDate() + '|' + SGK + '|' + LC.v;
     u._bc = u._bc || {}; if (u._bc[ym] && u._bc[ym].key === key) return u._bc[ym];
@@ -11163,22 +11183,27 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (iso === TD && c.issue === 'thieu-cham' && c.tin && !c.tout) { c.k = ''; c.issue = ''; c.cong = null; c.inShift = true; c.note.push('Đang trong ca – chưa chấm ra'); } // 08/11: hôm nay đã vào, chưa ra
         // sửa tay – luôn được ưu tiên
         var key2 = p.id + '|' + dd, mm = M[key2];
-        if (mm) { c.auto = { k: c.k, cong: c.cong, ot: c.otRaw, tin: c.tin, tout: c.tout, late: c.late, early: c.early, earlyOk: c.earlyOk }; c.k = mm.k; c.cong = mm.cong == null ? null : +mm.cong; c.tin = mm.tin || ''; c.tout = mm.tout || ''; c.late = +mm.late || 0; c.early = +mm.early || 0; c.earlyOk = mm.earlyOk != null ? !!mm.earlyOk : !!c.auto.earlyOk; c.otRaw = c.ot = +mm.ot || 0; c.otWait = false; c.issue = ''; c.src = 'tay'; c.manual = mm; S0.manual++; }
+        if (mm) { c.auto = { k: c.k, cong: c.cong, ot: c.otRaw, tin: c.tin, tout: c.tout, late: c.late, early: c.early, lateOk: c.lateOk, earlyOk: c.earlyOk }; c.k = mm.k; c.cong = mm.cong == null ? null : +mm.cong; c.tin = mm.tin || ''; c.tout = mm.tout || ''; c.late = +mm.late || 0; c.early = +mm.early || 0; c.lateOk = mm.lateOk != null ? !!mm.lateOk : !!c.auto.lateOk; c.earlyOk = mm.earlyOk != null ? !!mm.earlyOk : !!c.auto.earlyOk; c.otRaw = c.ot = +mm.ot || 0; c.otWait = false; c.issue = ''; c.src = 'tay'; c.manual = mm; S0.manual++; }
         else if (c.otWait && OK[key2]) { c.ot = c.otRaw; c.otWait = false; c.otOk = OK[key2]; }
         if (mm) { c.night = 0; c.otNt = 0; c.wk = null; if (c.tin && c.tout) { var rm = ccCalcDay(s, dsh, c.tin, c.tout, workDay ? 'work' : c.kind, c.kind === 'half' ? 'h' : 'f', {}, R); c.night = rm.night || 0; c.otNt = Math.min(c.otRaw || 0, rm.otNt || 0); c.wk = rm.worked; } }
         if (p.exc.hr && !p.exc.hw && mm) c.hours = c.tin && c.tout ? ccHours(dsh, c.tin, c.tout, R) : null;
         bcApplyCode(s, c);
-        if (exactFullWorkedMins !== null && !mm) { c.cong = Number((exactFullWorkedMins / 480).toFixed(3)); c.type = 'work'; }
+        if (dn && workDay && !dn.half && !dn.trip && !dn.lich && !mm) { c.k = dn.code; c.late = 0; c.early = 0; c.ot = 0; c.otRaw = 0; c.otWait = false; c.issue = ''; c.src = 'don'; c.cong = null; c.workHours = null; bcApplyCode(s, c); }
+        if (exactFullWorkedMins !== null && !mm && !dn) { c.cong = Number((exactFullWorkedMins / 480).toFixed(3)); c.type = 'work'; }
         var halfReq = dn && dn.half ? dn : null, xday = XMB[p.id + '|' + iso] || {}, tripRows = ['cong_sang', 'cong_chieu'].map(function (k) { return xday[k]; }).filter(function (z) { return z && z.trang_thai === 'Đã duyệt'; }), tripFullRows = ['di_cong_tac', 'cong_tac', 'di_cong', 'cong'].map(function (k) { return xday[k]; }).filter(function (z) { return z && z.trang_thai === 'Đã duyệt'; }), fullTrip = !!(dn && dn.trip) || tripFullRows.length > 0, tripUnits = fullTrip ? 2 : Math.min(2, tripRows.length), hasTrip = fullTrip || tripRows.length > 0, tripBothPunches = ccMin(c.tin) !== null && ccMin(c.tout) !== null, tripFullDay = fullTrip || tripUnits >= 2 || tripBothPunches;
         if ((halfReq || hasTrip) && !mm && workDay) {
+          var tripOtherHalf = false;
+          if (tripRows.length === 1 && !fullTrip && tripBothPunches) { var tiMix = ccMin(c.tin), toMix = ccMin(c.tout), diMix0 = shiftInfo(dsh), midMix = diMix0 && diMix0.ba !== null ? diMix0.ba : diMix0 ? Math.round((diMix0.a + diMix0.b) / 2) : 720; tripOtherHalf = tripRows[0].kieu === 'cong_sang' ? (tiMix >= midMix || toMix > midMix) : (tiMix < midMix || toMix <= midMix); tripFullDay = tripOtherHalf; }
           var leaveSession = halfReq ? (halfReq.buoi === 'chieu' ? 'chieu' : 'sang') : '', creditPaid = halfReq ? 0.5 : 0, creditWork = halfReq ? 0 : Math.min(1, tripUnits * 0.5), session = halfReq ? (leaveSession === 'sang' ? 'chieu' : 'sang') : (tripRows.some(function (z) { return z.kieu === 'cong_sang'; }) ? 'chieu' : 'sang');
-          var other = bcSessionCalc(s, dsh, c.file, session, p.exc, R), otherWork = other ? (+other.cong || 0) : 0, segment = bcSessionCalc(s, dsh, null, session, p.exc, R);
+          var otherApproval = bcApprovedCalc(s, u, dsh, iso, c.file && c.file.tin || '', c.file && c.file.tout || '', 'work', 'h', Object.assign({}, p.exc, { id: p.id }), R, session), other = otherApproval.r, otherWork = other ? (+other.cong || 0) : 0, segment = bcSessionCalc(s, dsh, null, session, p.exc, R);
           if (p.exc.nc) otherWork = 0.5;
-          var halfHours = segment ? segment.worked || 0 : 0, creditHours = 0;
+          var halfHours = segment ? segment.worked || 0 : 0, creditHours = halfReq && dsh && shiftInfo(dsh) ? shiftInfo(dsh).full * 0.5 : 0;
           if (hasTrip && !halfReq && dsh && shiftInfo(dsh)) { var diMix = shiftInfo(dsh); creditHours = Math.round(diMix.full * 0.5 * tripUnits * 100) / 100; }
           var workedMix = (other ? other.worked || 0 : halfHours) + creditHours, maxMix = dsh && shiftInfo(dsh) ? shiftInfo(dsh).full : workedMix; workedMix = Math.min(maxMix, workedMix);
-          c.mixAttendance = 1; c.type = 'work'; c.cong = Math.min(1, otherWork + creditWork); c.paid = creditPaid; c.mixPaid = creditPaid; c.bh = 0; c.unpaid = 0; c.src = halfReq ? 'don' : 'mix'; c.k = hasTrip ? 'CT' : halfReq ? 'X/2' : (c.cong >= 0.999 ? 'X' : 'X/2');
+          c.mixAttendance = 1; c.type = 'work'; c.cong = Math.min(1, otherWork + creditWork + creditPaid); c.paid = creditPaid; c.mixPaid = c.cong >= 0.999 && creditPaid ? 0 : creditPaid; c.bh = 0; c.unpaid = 0; c.src = halfReq ? 'don' : 'mix'; c.k = hasTrip ? 'CT' : halfReq ? (c.cong >= 0.999 ? 'X' : 'X/2') : (c.cong >= 0.999 ? 'X' : 'X/2');
           c.late = other ? other.late || 0 : 0; c.early = other ? other.early || 0 : 0; c.wk = workedMix; c.ot = other ? other.ot || 0 : 0; c.otRaw = other ? other.otRaw || other.ot || 0 : 0; c.otWait = !!(other && other.otWait); c.night = other ? other.night || 0 : 0; c.otNt = other ? other.otNt || 0 : 0;
+          c.lateOk = !!(otherApproval && otherApproval.lateOk); c.earlyOk = !!(otherApproval && otherApproval.earlyOk);
+          if (fullTrip || dn && dn.trip) { c.late = 0; c.early = 0; c.lateOk = true; c.earlyOk = true; }
           if (p.exc.hr) c.hours = workedMix;
           if (halfReq) c.note.push('Đơn nghỉ phép nửa ngày đã duyệt: nghỉ buổi ' + (leaveSession === 'sang' ? 'sáng' : 'chiều') + ' · trừ 0,5 ngày phép năm');
           tripRows.forEach(function (z) { c.note.push('Đơn ' + z.so + ' ' + xmTypeText(z.kieu).toLowerCase() + ' đã duyệt · tính ' + (tripFullDay ? 'đủ ngày công khi đủ lượt vào, ra' : '0,5 ngày công')); });
@@ -11189,9 +11214,9 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (p.exc.hw) { c.hours = null; var hk = c.kind === 'work' || c.kind === 'half' || (c.kind === 'rest' && !R.restIsOt); if (c.type === 'work' && hk && c.wk == null && (c.cong || 0) > 0 && dsh && shiftInfo(dsh)) { c.hours = Math.round(c.cong * shiftInfo(dsh).full * 100) / 100; c.note.push('Ký hiệu ' + c.k + ': tính ' + ccNum(c.hours) + ' giờ theo ca ' + dsh.id); }
           else if (c.type === 'work' && hk && c.wk != null) { c.hours = Number((c.wk).toFixed(2)); if (c.hours > 0) c.note.push('Tính lương theo giờ thực tế: ' + ccNum(c.hours) + ' giờ trong ca ' + (dsh ? dsh.id : '')); else c.hours = null; } if (((c.type === 'paid' || c.type === 'hol') && c.paid) || c.mixPaid) { var shi = dsh ? shiftInfo(dsh) : null, ph = Math.round((c.paid || c.mixPaid) * (shi ? shi.full : 8) * 100) / 100; S0.hPaid += ph; c.note.push('Nghỉ có hưởng lương ' + ccNum(ph) + ' giờ theo ca ' + (dsh ? dsh.id : '')); } }
         if (mm) {
-          var manualShift = dsh ? shiftInfo(dsh) : null, manualHours = c.tin && c.tout ? bcExactHours(dsh, c.tin, c.tout, c.kind === 'half' ? 'half' : 'full') : (Math.max(0, +c.cong || 0) * (manualShift ? manualShift.full : 8));
+          var manualShift = dsh ? shiftInfo(dsh) : null, manualHours = Math.max(0, +c.cong || 0) * (manualShift ? manualShift.full : 8);
           if (c.auto) { var autoHours = c.auto.tin && c.auto.tout ? bcExactHours(dsh, c.auto.tin, c.auto.tout, c.kind === 'half' ? 'half' : 'full') : (Math.max(0, +c.auto.cong || 0) * (manualShift ? manualShift.full : 8)), autoCode = bcCode(s, c.auto.k); c.auto.workHours = autoCode && autoCode.type === 'work' ? bcTrunc(autoHours, 2) : null; }
-          c.workHours = c.type === 'work' ? bcTrunc(manualHours, 2) : 0;
+          c.workHours = bcTrunc(manualHours, 2);
         } else if (c.type === 'work') {
           var bothPunches = ccMin(c.tin) !== null && ccMin(c.tout) !== null;
           if (workDay && p.exc.nc && !halfReq) { c.workHours = 8; if (hasTrip) { c.k = 'CT'; c.cong = 1; c.issue = ''; } }
@@ -11199,21 +11224,22 @@ if (typeof module !== 'undefined') module.exports = XW;
             var tripShift = shiftInfo(dsh), tripShiftMinutes = tripShift ? tripShift.full * 60 : 480, tripCredit = Math.min(tripShiftMinutes, tripUnits * tripShiftMinutes / 2), punchCredit = bothPunches && other && other.worked > 0 ? (bcExactHours(dsh, c.tin, c.tout, 'half') || 0) * 60 : 0;
             c.workHours = Number(((bothPunches ? Math.min(tripShiftMinutes, punchCredit + tripCredit) : tripCredit) / 60).toFixed(2)); c.cong = tripShiftMinutes ? Number((Math.min(tripShiftMinutes, bothPunches ? punchCredit + tripCredit : tripCredit) / tripShiftMinutes).toFixed(3)) : 0; c.k = 'CT'; c.issue = '';
           } else if (workDay && halfReq) {
-            c.workHours = bcTrunc(Math.min(4, p.exc.nc ? 4 : Math.max(0, other && other.worked || 0)), 2);
+            c.workHours = bcTrunc(Math.min(dsh && shiftInfo(dsh) ? shiftInfo(dsh).full : 8, workedMix), 2);
           } else if (workDay && p.exc.nc) c.workHours = 8;
           else if (bothPunches) c.workHours = Number((c.wk || 0).toFixed(2));
           else if (c.cong > 0) c.workHours = bcTrunc(c.cong * (shiftInfo(dsh) ? shiftInfo(dsh).full : 8), 2);
         }
-         if (hasTrip && !mm && workDay && c.type === 'work') { c.workHours = tripFullDay ? 8 : 4; c.cong = tripFullDay ? 1 : 0.5; c.k = tripFullDay ? 'CT' : 'X/2'; c.issue = ''; }
+         if (hasTrip && !mm && workDay && c.type === 'work') { var tripFullHours0 = dsh && shiftInfo(dsh) ? shiftInfo(dsh).full : 8; c.workHours = tripFullDay ? tripFullHours0 : tripFullHours0 / 2; c.cong = tripFullDay ? 1 : 0.5; c.k = tripFullDay ? 'CT' : 'X/2'; c.issue = ''; }
          if (weekendSun && !mm && !dn) {
            var sundayIn = ccMin(c.tin) !== null, sundayOut = ccMin(c.tout) !== null;
            c.type = 'work';
+          c.late = 0; c.early = 0;
            c.otRaw = c.ot = 0; c.otWait = false; c.otNt = 0;
-           if (hasTrip) { c.workHours = tripFullDay ? 8 : 4; c.cong = tripFullDay ? 1 : 0.5; c.k = fullTrip ? 'CT' : tripFullDay ? 'X' : 'X/2'; c.issue = ''; }
+           if (hasTrip) { var tripFullHours1 = dsh && shiftInfo(dsh) ? shiftInfo(dsh).full : 8; c.workHours = tripFullDay ? tripFullHours1 : tripFullHours1 / 2; c.cong = tripFullDay ? 1 : 0.5; c.k = fullTrip ? 'CT' : tripFullDay ? 'X' : 'X/2'; c.issue = ''; }
            else if (!sundayIn || !sundayOut) { c.cong = 0; c.wk = 0; c.workHours = 0; c.k = '?'; c.issue = 'vang'; c.src = 'don'; }
            else if (exactFullWorkedMins !== null) { c.wk = exactFullWorkedMins / 60; c.cong = Number((exactFullWorkedMins / 480).toFixed(3)); c.workHours = Number((exactFullWorkedMins / 60).toFixed(2)); c.k = exactFullWorkedMins >= 475 ? 'X' : 'X/2'; c.issue = ''; c.src = 'don'; if (p.exc.hr) c.hours = c.workHours; }
          }
-        if (c.workHours == null && ['paid', 'hol', 'bh', 'unpaid'].indexOf(c.type) >= 0) c.workHours = 0;
+        if (c.workHours == null && ['paid', 'hol', 'bh', 'unpaid'].indexOf(c.type) >= 0) { var leaveHours = c.type === 'unpaid' ? 0 : (c.type === 'bh' ? (c.bh ? 1 : 0) : (c.paid || 0)); c.cong = leaveHours; c.workHours = bcTrunc(leaveHours * (dsh && shiftInfo(dsh) ? shiftInfo(dsh).full : 8), 2); }
         if (c.workHours != null) { c.workHours = bcTrunc(c.workHours, 2); S0.attHours += c.workHours; if (p.exc.hr && c.type === 'work') c.hours = c.workHours; }
         if (p.exc.hr && c.type === 'work' && c.hours != null) { S0.hours += c.hours; S0.hDays++; if (p.exc.hw && dsh) { if (dsh.parts) { var pf = dsh.parts.map(function (q) { return (shiftInfo(q) || { full: 0 }).full; }), pt = pf[0] + pf[1] || 1; dsh.parts.forEach(function (q, j) { S0.hBy[q.id] = (S0.hBy[q.id] || 0) + c.hours * pf[j] / pt; }); } else S0.hBy[dsh.id] = (S0.hBy[dsh.id] || 0) + c.hours; } }
         if (p.exc.hr && !p.exc.hw && c.tin && c.tout && c.hours != null && !c.mixAttendance) { var t1 = ccMin(c.tin), t2 = ccMin(c.tout); if (t2 <= t1) t2 += 1440; var hi = dsh ? shiftInfo(dsh) : null; c.night = Math.min(c.hours, ccNightI(t1, t2, hi) / 60); }
@@ -11293,8 +11319,9 @@ if (typeof module !== 'undefined') module.exports = XW;
   function bcCalcCall(u, path, body) { return wfOn(u) ? wfCall(u, path, body) : wfDemoOn(u) ? wfDemoGet(path, body) : Promise.reject(new Error('Kết nối máy chủ chấm công để lưu kết quả tính công vào D1.')); }
   function wfCalcPull(u, ym, demo, fileOnly) {
     var first = ym + '-01', last = bcDays(ym).slice(-1)[0], w = u.wf = u.wf || {}, nv = nvIndex(u), call = demo ? wfDemoGet : function (p, b) { return wfCall(u, p, b); };
-    return Promise.all([fileOnly ? Promise.resolve({ list: [] }) : call('cham?tu=' + first + '&den=' + last), call('don?tu=' + first), call('xin-muon?tu=' + first)]).then(function (rs) {
-      if (!fileOnly) { w.punches = w.punches || {}; var punchList = Array.isArray(rs[0] && rs[0].list) ? rs[0].list : []; w.punches[ym] = wfMergePunches(w.punches[ym], punchList.filter(function (x) { return !!nv[String(x.ma).toUpperCase()] && wfIso(x.t).slice(0, 7) === ym; })); }
+    return Promise.all([call('cham?tu=' + first + '&den=' + last), call('don?tu=' + first), call('xin-muon?tu=' + first), call('cong?ym=' + ym)]).then(function (rs) {
+      var punchList = Array.isArray(rs[0] && rs[0].list) ? rs[0].list : [];
+      wfSetPunchRows(u, ym, punchList.filter(function (x) { return !!nv[String(x.ma).toUpperCase()] && wfIso(x.t).slice(0, 7) === ym; }));
       var remote = {}, local = {}, remoteDon = Array.isArray(rs[1] && rs[1].list) ? rs[1].list : []; remoteDon.filter(function (x) { return nv[x.ma] && x.tu <= last && x.den >= first; }).forEach(function (x) { remote[x.so] = x; });
       (u.data.DON || []).forEach(function (d) { if (d['Nguồn'] === 'Điện thoại' && String(d['Đến ngày'] || d['Từ ngày'] || '') >= first && String(d['Từ ngày'] || '') <= last) local[d['Số đơn']] = d; });
       Object.keys(remote).forEach(function (so) {
@@ -11302,15 +11329,37 @@ if (typeof module !== 'undefined') module.exports = XW;
         if (!d) editRow(u, 'DON', so, n, 'nhận đơn ' + so + ' khi tính công tháng ' + HR.ymLabel(ym));
         else if (wfDonChanged(d, n)) editRow(u, 'DON', so, { 'Loại nghỉ': n['Loại nghỉ'], 'Từ ngày': n['Từ ngày'], 'Đến ngày': n['Đến ngày'], 'Số ngày': n['Số ngày'], _ngayTrucCN: n._ngayTrucCN, _ngayNghiBuT7: n._ngayNghiBuT7, 'Buổi': n['Buổi'], _buoi: n._buoi, _lydo: n._lydo, _anh: n._anh, 'Lý do': n['Lý do'], 'Người duyệt': n['Người duyệt'], 'Ngày duyệt': n['Ngày duyệt'], 'Trạng thái': n['Trạng thái'], 'Lý do từ chối': n['Lý do từ chối'] }, 'cập nhật đơn ' + so + ' khi tính công tháng ' + HR.ymLabel(ym));
       });
-      return xmPull(u, call, 'xin-muon?tu=' + first);
+      return xmPull(u, call, 'xin-muon?tu=' + first).then(function () {
+        u.data = u.data || {}; u.data.XIN_MUON = (w.xm || []).map(function (x) { return Object.assign({}, x); });
+        var saved = Array.isArray(rs[3] && (rs[3].cong || rs[3].list)) ? (rs[3].cong || rs[3].list) : []; saved = saved.filter(function (x) { return x && nv[String(x.ma).toUpperCase()]; });
+        bcSavedReplace(u, ym, saved);
+      });
     }).then(function () { bcX(u).v++; u._bc = {}; u._ccd = null; ACACHE.key = null; saveUnits(true); });
   }
-  function bcCalculateNow(u, ym, sourceMode) {
+  var BC_HYDRATE = {};
+  function bcApplySyncResponse(u, ym, j) {
+    var nv = nvIndex(u), raw = Array.isArray(j && j.cham) ? j.cham : null;
+    if (raw) wfSetPunchRows(u, ym, raw.filter(function (x) { return !!nv[String(x.ma).toUpperCase()] && wfIso(x.t).slice(0, 7) === ym; }));
+    var saved = Array.isArray(j && j.cong) ? j.cong : Array.isArray(j && j.list) ? j.list : null; if (saved) saved = saved.filter(function (x) { return x && nv[String(x.ma).toUpperCase()]; });
+    if (saved) bcSavedReplace(u, ym, saved);
+    u._ccHydrated = u._ccHydrated || {}; u._ccHydrated[ym] = Date.now(); u._bc = {}; u._ccd = null;
+    return { cham: raw ? raw.length : 0, cong: saved ? saved.length : 0 };
+  }
+  function bcHydrateMonth(u, ym, sourceMode, force) {
+    if (!u || (!wfOn(u) && !wfDemoOn(u))) return Promise.resolve(false);
+    u._ccHydrated = u._ccHydrated || {};
+    var key = u.id + '|' + ym, old = BC_HYDRATE[key]; if (old) return old;
+    if (!force && u._ccHydrated[ym]) return Promise.resolve(true);
+    var p = wfCalcPull(u, ym, !wfOn(u), sourceMode === 'file').then(function () { u._ccHydrated[ym] = Date.now(); return true; }, function (er) { u._ccHydrateError = er; u._ccHydrated[ym] = Date.now(); return false; }).then(function (ok) { delete BC_HYDRATE[key]; if (curPage === 'cc' && bcUnit() === u && (PS.bc || {}).m === ym) render(); return ok; });
+    BC_HYDRATE[key] = p; return p;
+  }
+  function bcCalculateNow(u, ym, sourceMode, onlyIds) {
     var demo = !wfOn(u) && wfDemoOn(u), ready = wfOn(u) || demo ? Promise.resolve() : Promise.reject(new Error('Kết nối máy chủ chấm công để lưu kết quả tính công vào D1.'));
     sourceMode = sourceMode === 'file' || sourceMode === 'device' ? sourceMode : '';
     return ready.then(function () { return wfCalcPull(u, ym, demo, sourceMode === 'file'); }).then(function () {
+      u._ccHydrated = u._ccHydrated || {}; u._ccHydrated[ym] = Date.now();
       bcX(u).v++; u._bc = {}; u._ccd = null; bcMonth(u, ym, sourceMode);
-      var X = bcX(u); return wfSendCong(u, ym, !X.lock[ym], '', sourceMode).then(function (n) { if (sourceMode === 'device') { X.source[ym] = 'with-device'; BC_DEVICE_ACTIVE[u.id + '|' + ym] = 1; } else if (sourceMode === 'file') { X.source[ym] = 'file'; delete BC_DEVICE_ACTIVE[u.id + '|' + ym]; } u._bc = {}; u._ccd = null; saveUnits(); return n; });
+      var X = bcX(u); return wfSendCong(u, ym, !X.lock[ym], '', sourceMode, null, onlyIds).then(function (n) { if (sourceMode === 'device') { X.source[ym] = 'with-device'; BC_DEVICE_ACTIVE[u.id + '|' + ym] = 1; } else if (sourceMode === 'file') { X.source[ym] = 'file'; delete BC_DEVICE_ACTIVE[u.id + '|' + ym]; } u._bc = {}; u._ccd = null; saveUnits(); return n; });
     });
   }
   function bcAutoProcess(u, j, currentYm) {
@@ -11333,6 +11382,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     if (!S.units.length) return pageHead('Tổng hợp công') + noData('dữ liệu chấm công');
     var ms = bcMonths(), f = ps('bc', { m: '', view: 'grid', q: '', dept: '', only: false, u: '', k: 'all' }), uAll = selUnits(), u0 = bcUnit(); if (!khoiBoth()) f.k = 'all'; // 20/11: công ty 1 khối – không hiện chọn khối // 11/11 09:12 anh: mỗi công ty 1 tab, mỗi khối 1 bảng
     if (ms.indexOf(f.m) < 0) f.m = ms.filter(function (m) { return m <= refDate().slice(0, 7) && selUnits().some(function (u) { return (u.data.CC || {})[m]; }); }).pop() || ms[ms.length - 1];
+    if (u0 && (wfOn(u0) || wfDemoOn(u0)) && !(u0._ccHydrated && u0._ccHydrated[f.m])) { bcHydrateMonth(u0, f.m, bcSyncMode(u0, f.m)); return pageHead('Tổng hợp công') + '<div class="card card-pad"><p class="muted">Đang tải lượt chấm, đơn đã duyệt và bảng công tháng ' + HR.ymLabel(f.m) + '…</p></div>'; }
     var us = [u0], res = us.map(function (u) { return bcMonth(u, f.m, bcViewMode(u, f.m)); }), T = { n: 0, work: 0, paid: 0, issues: 0, ot: 0, otWait: 0, manual: 0, otPay: 0, late: 0, hours: 0, night: 0 }, NK = { vp: 0, sx: 0 };
     res.forEach(function (r) { r.ppl.forEach(function (p) { NK[p.exc.sch ? 'sx' : 'vp']++; }); });
     res.forEach(function (r) { r.ppl.forEach(function (p) { if (!bcInK(p, f.k)) return; T.n++; T.hours += p.exc.hr ? p.sum.hours : 0; T.night += p.sum.night || 0; T.work += p.sum.work; T.paid += p.sum.paid + p.sum.hol; T.issues += p.sum.issues; T.ot += p.sum.otN + p.sum.otR + p.sum.otH; T.otWait += p.sum.otWait; T.manual += p.sum.manual; T.otPay += p.sum.otPay; T.late += p.sum.late; }); });
@@ -11630,7 +11680,9 @@ if (typeof module !== 'undefined') module.exports = XW;
       if (hasIn) { if (r.code && r.code !== '?' && r.code !== 'KP?') $('#eK', m).value = r.code; else if (r.code === 'KP?') $('#eK', m).value = 'KP'; $('#eC', m).value = String(wd ? r.cong : 0); m._ot = r.otRaw || 0; }
       var halfReq = c.don && c.don.half ? c.don : null, tripRows = xmList(u).filter(function (z) { return z.ma === p.id && z.ngay === c.iso && (z.kieu === 'cong_sang' || z.kieu === 'cong_chieu') && z.trang_thai === 'Đã duyệt'; });
       var session = halfReq ? (halfReq.buoi === 'chieu' ? 'sang' : 'chieu') : tripRows.length ? (tripRows.some(function (z) { return z.kieu === 'cong_sang'; }) ? 'chieu' : 'sang') : '';
-      var er = session ? bcSessionCalc(s, dsh, { tin: ti, tout: to }, session, p.exc, R) : r, early = er ? er.early || 0 : 0, earlyOk = false;
+      var approved = bcApprovedCalc(s, u, dsh, c.iso, ti, to, wd ? 'work' : c.kind, c.kind === 'half' ? 'h' : 'f', Object.assign({}, p.exc, { id: p.id }), R, session), er = approved.r, displayCalc = session ? er : (r = approved.r), early = er ? er.early || 0 : 0, earlyOk = !!approved.earlyOk;
+      if (hasIn && (session || c.don && c.don.trip)) { var mixedCredit = c.don && c.don.trip ? 1 : halfReq ? 0.5 : 0.5, mixed = Math.min(1, (session ? (+er.cong || 0) : (+r.cong || 0)) + mixedCredit), mixedShift = dsh && shiftInfo(dsh); $('#eK', m).value = c.don && c.don.trip ? 'CT' : tripRows.length ? (mixed >= 0.999 ? 'CT' : 'X/2') : (mixed >= 0.999 ? 'X' : 'X/2'); $('#eC', m).value = String(mixed); m._mixHours = Number((mixed * (mixedShift ? mixedShift.full : 8)).toFixed(2)); }
+      if (hasIn) { var lateView = session ? er : r; m._late = lateView ? lateView.late || 0 : 0; m._lateOk = !!approved.lateOk; $('#eLate', m).value = m._late || 0; }
       if (wd && early) {
         var xrk = { 'Đã duyệt': 3, 'Chờ duyệt': 2, 'Từ chối': 1 }, earlyReqs = xmList(u).filter(function (z) { return z.ma === p.id && z.ngay === c.iso && z.kieu === 'som'; }).sort(function (a, b) { return (xrk[b.trang_thai] || 0) - (xrk[a.trang_thai] || 0); }), earlyReq = earlyReqs[0];
         if (earlyReq && earlyReq.trang_thai === 'Đã duyệt') {
@@ -11644,7 +11696,10 @@ if (typeof module !== 'undefined') module.exports = XW;
     ['eIn', 'eOut'].forEach(function (k) { $('#' + k, m).addEventListener('input', recalc); });
     $('#eK', m).addEventListener('change', function () { var d = bcCode(s, $('#eK', m).value); if (d) $('#eC', m).value = String(d.type === 'work' ? (c.kind === 'half' ? Math.min(+d.w, 0.5) : +d.w) : 0); });
     var rs = $('#eReset', m); if (rs) rs.addEventListener('click', function () {
-      var by = ccUser(), M = bcX(u).m[ym]; delete M[F.key];
+      var by = ccUser(), Xr = bcX(u), M = Xr.m[ym]; delete M[F.key];
+      u._ccManualClear = u._ccManualClear || {}; u._ccManualClear[ym] = u._ccManualClear[ym] || {}; u._ccManualClear[ym][F.key] = 1;
+      var savedManual = BC_SAVED[bcSavedKey(u, ym)]; if (savedManual && savedManual.rows) delete savedManual.rows[String(p.id).toUpperCase()];
+      Xr.v++; u._bc = {}; var persistRestore = (wfOn(u) || wfDemoOn(u)) ? wfSendCong(u, ym, !Xr.lock[ym], '', bcSyncMode(u, ym), null, [p.id]) : Promise.resolve(0); persistRestore.then(function () { if (curPage === 'cc') render(); }, function (er) { toast('Đã khôi phục theo quy tắc ở máy này, chưa gửi được D1', 'err', er.message); });
       bcLogAdd(u, { ym: ym, id: p.id, name: p.name, iso: c.iso, what: 'Khôi phục theo quy tắc', old: bcDesc(c), nw: bcDesc(Object.assign({}, c.auto, { otRaw: c.auto.ot })), why: $('#eWhy', m).value.trim(), by: by });
       bcSaveX(u, 'khôi phục ô ' + p.id + ' ' + c.iso); m.close(); toast('Đã khôi phục theo quy tắc', 'ok'); render();
     });
@@ -11657,8 +11712,10 @@ if (typeof module !== 'undefined') module.exports = XW;
       var lt = Math.round(+$('#eLate', m).value); if (isNaN(lt) || lt < 0 || lt > 600) { msg.textContent = 'Phút đi muộn từ 0 đến 600'; return; }
       var congManual = +$('#eC', m).value; if (isNaN(congManual) || congManual < 0 || congManual > 1) { msg.textContent = 'Ngày công từ 0 đến 1'; $('#eC', m).focus(); return; }
       var lateAuto = c.manual ? (c.manual.lateAuto != null ? +c.manual.lateAuto : +(c.auto && c.auto.late) || 0) : (c.late || 0);
-      var nw = { k: $('#eK', m).value, cong: Number(congManual.toFixed(3)), tin: ti ? ccHM(ccMin(ti)) : '', tout: to ? ccHM(ccMin(to)) : '', ot: ot, late: lt, lateAuto: lateAuto, early: early, earlyOk: m._earlyOk != null ? !!m._earlyOk : !!c.earlyOk, why: why, by: by, at: nowVn(), after: L ? 1 : 0 };
+      var nw = { k: $('#eK', m).value, cong: Number(congManual.toFixed(3)), tin: ti ? ccHM(ccMin(ti)) : '', tout: to ? ccHM(ccMin(to)) : '', ot: ot, late: lt, lateAuto: lateAuto, lateOk: m._lateOk != null ? !!m._lateOk : !!c.lateOk, early: early, earlyOk: m._earlyOk != null ? !!m._earlyOk : !!c.earlyOk, why: why, by: by, at: nowVn(), after: L ? 1 : 0 };
       var X = bcX(u), M = X.m[ym] || (X.m[ym] = {}); M[F.key] = nw;
+      if (u._ccManualClear && u._ccManualClear[ym]) { delete u._ccManualClear[ym][F.key]; if (!Object.keys(u._ccManualClear[ym]).length) delete u._ccManualClear[ym]; }
+      X.v++; u._bc = {}; var persistManual = (wfOn(u) || wfDemoOn(u)) ? wfSendCong(u, ym, !X.lock[ym], '', bcSyncMode(u, ym), null, [p.id]) : Promise.resolve(0); persistManual.then(function () { if (curPage === 'cc') render(); }, function (er) { toast('Đã lưu sửa tay ở máy này, chưa gửi được D1', 'err', er.message); });
       bcLogAdd(u, { ym: ym, id: p.id, name: p.name, iso: c.iso, what: 'Sửa tay', old: bcDesc(c), nw: bcDesc({ k: nw.k, cong: nw.cong, tin: nw.tin, tout: nw.tout, otRaw: nw.ot, late: nw.late, early: nw.early }), why: why, by: by });
       bcSaveX(u, 'sửa ô ' + p.id + ' ' + c.iso + ': ' + nw.k + ' ' + nw.cong + ' công, TC ' + nw.ot); m.close(); toast('Đã lưu sửa tay', 'ok', L ? 'Tháng đã chốt – ô này được đánh dấu để gửi nhân viên xác nhận lại.' : 'Ô sửa tay giữ nguyên, không bị quy tắc tính đè lại.'); render();
     });
@@ -11685,7 +11742,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     var options = eligible.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.name + ' · ' + p.id) + '</option>'; }).join('');
     var body = '<div class="field"><label for="bcResetScope">Phạm vi</label><select class="input" id="bcResetScope"><option value="all">Toàn bộ nhân viên</option><option value="one">Theo từng nhân viên</option></select></div>' +
       '<div class="field" id="bcResetEmpWrap" style="display:none;margin-top:10px"><label for="bcResetEmp">Nhân viên</label><select class="input" id="bcResetEmp"' + (eligible.length ? '' : ' disabled') + '>' + (options || '<option value="">Không có nhân viên cần làm mới</option>') + '</select></div>' +
-      '<div class="notice bad" style="margin:12px 0">' + ic('info') + '<div><b>Dữ liệu chấm công tháng ' + HR.ymLabel(ym) + ' sẽ bị xóa</b>: dòng nhập từ file, lượt vào/ra trên máy chủ, sửa tay và nhật ký sửa trong phạm vi đã chọn. Thao tác này không khôi phục được.</div></div>' +
+      '<div class="notice warn" style="margin:12px 0">' + ic('info') + '<div><b>Làm mới chỉ tải lại và tính lại dữ liệu tháng ' + HR.ymLabel(ym) + '</b>: lượt chấm trên máy chủ, đơn đã duyệt và ô sửa tay được giữ nguyên. Muốn bỏ sửa tay, mở đúng ô rồi bấm <b>Khôi phục theo quy tắc</b>.</div></div>' +
       '<p class="faint" style="font-size:12.5px">Người miễn chấm công (' + exempt + ') được giữ nguyên. Đơn nghỉ và đơn đi muộn/về sớm/công tác đã duyệt, ngày lễ/tết, ngày nghỉ tuần và lịch ca cũng được giữ; bảng công sẽ tự tính lại.</p>' +
       bcWho() + '<p id="bcResetMsg" class="tl-msg"></p><div class="link-row" style="justify-content:flex-end"><button class="btn" data-close>Hủy</button><button class="btn btn-danger" id="bcResetGo"' + (eligible.length ? '' : ' disabled') + '>Làm mới bảng công</button></div>';
     var m = modal('Làm mới bảng công tháng ' + HR.ymLabel(ym), shortUnit(u.name), body, true), scope = $('#bcResetScope', m), empWrap = $('#bcResetEmpWrap', m), goBtn = $('#bcResetGo', m), msg = $('#bcResetMsg', m);
@@ -11695,24 +11752,11 @@ if (typeof module !== 'undefined') module.exports = XW;
       var fresh = bcMonth(u, ym); if (fresh.lock) { msg.textContent = 'Tháng đã chốt công. Mở lại tháng trước khi làm mới.'; goBtn.disabled = true; return; }
       var ids = scope.value === 'one' ? [$('#bcResetEmp', m).value] : eligible.map(function (p) { return p.id; });
       if (!ids.length || !ids[0]) { msg.textContent = 'Chọn nhân viên cần làm mới.'; return; }
-      var targets = {}; ids.forEach(function (id) { targets[String(id).toUpperCase()] = 1; }); goBtn.disabled = true; msg.textContent = 'Đang xóa lượt chấm trên máy chủ…';
-      var remote = wfOn(u) ? wfCall(u, 'cham-xoa', { ym: ym, ma: ids }) : wfDemoOn(u) ? wfDemoGet('cham-xoa', { ym: ym, ma: ids }) : Promise.resolve({ ok: true, n: 0 });
-      remote.then(function () {
-        u.data.CC = u.data.CC || {}; u.data.CC[ym] = (u.data.CC[ym] || []).filter(function (row) { return !targets[String(row['Mã NV'] || '').toUpperCase()]; });
-        var X = bcX(u), clearMonth = function (root) { var o = root[ym] || {}; Object.keys(o).forEach(function (key) { var sep = key.lastIndexOf('|'), id = (sep < 0 ? key : key.slice(0, sep)).toUpperCase(); if (targets[id]) delete o[key]; }); if (Object.keys(o).length) root[ym] = o; else delete root[ym]; };
-        clearMonth(X.m); clearMonth(X.ok); X.log = X.log.filter(function (entry) { return entry.ym !== ym || !entry.id || !targets[String(entry.id).toUpperCase()]; });
-        if (u.wf && u.wf.punches && u.wf.punches[ym]) u.wf.punches[ym] = u.wf.punches[ym].filter(function (p) { return !targets[String(p.ma || '').toUpperCase()]; });
-        if (u.wf && u.wf.cong && u.wf.cong[ym]) { Object.keys(u.wf.cong[ym]).forEach(function (id) { if (targets[String(id).toUpperCase()]) delete u.wf.cong[ym][id]; }); if (!Object.keys(u.wf.cong[ym]).length) delete u.wf.cong[ym]; }
-        u._bc = {}; var saved = bcSaveX(u, 'làm mới bảng công tháng ' + ym + ' (' + (scope.value === 'one' ? ids[0] : ids.length + ' nhân viên') + ')'); m.close(); render();
-        var syncError = null, jobs = [Promise.resolve(saved)];
-        if (wfOn(u) || wfDemoOn(u)) jobs.push(wfSendCong(u, ym, true).catch(function (er) { syncError = er; }));
-        Promise.all(jobs).then(function () { if (SV && SV.me) return svFlushAll(true); }).then(function () {
-          if (SV && SV.me) svChip(); render();
-          if (syncError) toast('Đã làm mới bảng công', 'err', 'Chưa gửi lại bảng công lên máy chủ chấm công: ' + syncError.message);
-          else if (SV && SV.me && SV.st !== 'ok') toast('Đã làm mới bảng công', 'err', 'Chưa lưu được trạng thái mới lên máy chủ phần mềm. Kiểm tra trạng thái đồng bộ.');
-          else toast('Đã làm mới bảng công tháng ' + HR.ymLabel(ym), 'ok', 'Dữ liệu được tính lại; đơn đã duyệt và người miễn chấm công được giữ nguyên.');
-        });
-      }).catch(function (er) { goBtn.disabled = false; msg.textContent = 'Chưa xóa được lượt chấm trên máy chủ: ' + er.message; });
+      goBtn.disabled = true; msg.textContent = 'Đang tải lại lượt chấm và tính lại bảng công…';
+      var connected = wfOn(u) || wfDemoOn(u), mode = bcSyncMode(u, ym);
+      var refresh = bcHydrateMonth(u, ym, mode, true).then(function () { return connected ? bcCalculateNow(u, ym, mode, ids) : 0; });
+      refresh.then(function () { m.close(); render(); toast('Đã làm mới bảng công tháng ' + HR.ymLabel(ym), 'ok', 'Lượt chấm, đơn đã duyệt và ô sửa tay được giữ nguyên.'); }).catch(function (er) { goBtn.disabled = false; msg.textContent = 'Chưa làm mới được: ' + er.message; });
+      return;
     });
   };
   /* ----- Chốt công tháng ----- */
@@ -12087,14 +12131,35 @@ if (typeof module !== 'undefined') module.exports = XW;
     });
     return order.map(function (k) { return by[k]; }).sort(function (a, b) { return (+a.t || 0) - (+b.t || 0) || String(a.id || '').localeCompare(String(b.id || '')); });
   }
+  function wfSetPunchRows(u, ym, rows) {
+    u.wf = u.wf || {}; u.wf.punches = u.wf.punches || {}; u.data = u.data || {};
+    var next = wfMergePunches([], rows);
+    u.wf.punches[ym] = next;
+    u.data.CHAM = u.data.CHAM || {}; u.data.CHAM[ym] = next.map(function (x) { return Object.assign({}, x); });
+    return next;
+  }
   // lượt chấm 1 tháng → giờ vào đầu tiên, giờ ra cuối cùng mỗi người mỗi ngày
   function wfMap(u, ym, sourceMode) {
-    var w = u.wf || {}, list = (w.punches && w.punches[ym]) || [], excludeDevice = sourceMode === 'file' || sourceMode === 'wifi' || w.excludeDevice === true || w.includeDevice === false, o = {};
+    var w = u.wf || {}, list = (w.punches && w.punches[ym]) || (u.data && u.data.CHAM && u.data.CHAM[ym]) || [], excludeDevice = sourceMode === 'file' || sourceMode === 'wifi' || w.excludeDevice === true || w.includeDevice === false, o = {};
     list.slice().sort(function (a, b) { return a.t - b.t; }).forEach(function (x) {
       var tool = /^(zkteco|tool)$/i.test(String(x.source || '')) || x.cach === 'may';
       if (tool && excludeDevice) return;
-      var k = x.ma + '|' + wfIso(x.t), r = o[k] || (o[k] = { tin: '', tout: '', n: 0, cach: {}, iso: wfIso(x.t) }); r.n++; r.cach[x.cach] = 1;
-      if (x.loai === 'vao') { if (!r.tin) r.tin = wfHM(x.t); } else r.tout = wfHM(x.t);
+      var k = x.ma + '|' + wfIso(x.t), r = o[k] || (o[k] = { tin: '', tout: '', n: 0, cach: {}, iso: wfIso(x.t), ins: [], outs: [] }); r.n++; r.cach[x.cach] = 1; (x.loai === 'vao' ? r.ins : r.outs).push(x);
+    });
+    var s = ccOf(u), nv = nvIndex(u);
+    Object.keys(o).forEach(function (k) {
+      var r = o[k], id = k.split('|')[0], e = nv[id], sh = e ? ccShiftOn(ccShiftOf(s, e['Phòng ban'] || '', id), r.iso) : null, si = sh && shiftInfo(sh), ins = r.ins.slice().sort(function (a, b) { return a.t - b.t; }), outs = r.outs.slice().sort(function (a, b) { return a.t - b.t; });
+      if (si && ins.length) {
+        var targetIn = si.a, targetOut = si.b, minOf = function (t) { var v = ccMin(wfHM(t)); return v == null ? null : v < si.a - 360 ? v + 1440 : v; }, bestIn = ins[0], bestInD = 1e9;
+        ins.forEach(function (x) { var v = minOf(x.t), d = v == null ? 1e9 : Math.abs(v - targetIn); if (d < bestInD || d === bestInD && x.t < bestIn.t) { bestIn = x; bestInD = d; } });
+        r.tin = wfHM(bestIn.t);
+        var inMin = minOf(bestIn.t), bestOut = null, bestOutD = 1e9;
+        outs.forEach(function (x) { var v = minOf(x.t); if (v == null || inMin != null && v < inMin) return; var d = Math.abs(v - targetOut); if (d < bestOutD || d === bestOutD && (!bestOut || x.t > bestOut.t)) { bestOut = x; bestOutD = d; } });
+        r.tout = bestOut ? wfHM(bestOut.t) : (outs.length ? wfHM(outs[outs.length - 1].t) : '');
+      } else {
+        r.tin = ins.length ? wfHM(ins[0].t) : ''; r.tout = outs.length ? wfHM(outs[outs.length - 1].t) : '';
+      }
+      delete r.ins; delete r.outs;
     });
     return o;
   }
@@ -12119,11 +12184,26 @@ if (typeof module !== 'undefined') module.exports = XW;
   }
   window.ccAppExtra = ccAppExtra;
   function bcSavedKey(u, ym) { return u.id + '|' + ym; }
-  function bcSavedSet(u, ym, list, replace) {
+  function bcSavedSet(u, ym, list, replace, clearRows) {
     var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }); cache.rev = (cache.rev || 0) + 1; u._bc = {};
+    if (clearRows) cache.rows = {};
     (list || []).forEach(function (x) { if (!x || !x.ma || !x.du_lieu || typeof x.du_lieu !== 'object' || Array.isArray(x.du_lieu) || !Object.keys(x.du_lieu).length) return; var id = String(x.ma).toUpperCase(); cache.rows[id] = { du_lieu: x.du_lieu }; if (cache.skip) delete cache.skip[id]; });
     if (replace) cache.loaded = true; cache.loading = false; cache.failed = false; return cache;
   }
+  function bcSavedApplyManual(u, ym, list) {
+    var X = bcX(u), M = X.m[ym] || (X.m[ym] = {});
+    (list || []).forEach(function (x) {
+      var d = x && x.du_lieu, flags = d && d.suaTay, ct = d && d.ct || {}, ng = d && d.ngay || {};
+      if (!x || !d || !flags || typeof flags !== 'object') return;
+      Object.keys(flags).forEach(function (dd) {
+        if (!flags[dd]) return;
+        var v = Array.isArray(ct[dd]) ? ct[dd] : [], key = String(x.ma).toUpperCase() + '|' + dd;
+        if (M[key]) return;
+        M[key] = { k: String(ng[dd] || ''), cong: v[8] == null ? 0 : +v[8] || 0, tin: v[0] || '', tout: v[1] || '', late: +v[2] || 0, lateAuto: +v[2] || 0, early: +v[3] || 0, earlyOk: !!v[15], ot: v[6] == null ? (+v[5] || 0) : (+v[6] || 0), why: '', by: 'D1', at: '' };
+      });
+    });
+  }
+  function bcSavedReplace(u, ym, list) { bcSavedSet(u, ym, list, true, true); bcSavedApplyManual(u, ym, list); }
   function bcSavedDropPeople(u, ym, ids) {
     var key = bcSavedKey(u, ym), cache = BC_SAVED[key] || (BC_SAVED[key] = { rev: 0, rows: {} }), loaded = !!cache.loaded; cache.skip = cache.skip || {};
     (ids || []).forEach(function (id) { if (id) cache.skip[String(id).toUpperCase()] = 1; });
@@ -12136,7 +12216,7 @@ if (typeof module !== 'undefined') module.exports = XW;
     cache.loading = true; var rev = cache.rev || 0, call = wfOn(u) ? function () { return wfCall(u, 'cong?ym=' + ym); } : function () { return wfDemoGet('cong?ym=' + ym); };
     call().then(function (j) {
       if ((cache.rev || 0) !== rev) return;
-      bcSavedSet(u, ym, Array.isArray(j.list) ? j.list : [], false); cache.loaded = true;
+      var nv = nvIndex(u), list = (Array.isArray(j.list) ? j.list : []).filter(function (x) { return x && nv[String(x.ma).toUpperCase()]; }); bcSavedSet(u, ym, list, false); bcSavedApplyManual(u, ym, list); cache.loaded = true;
       if (curPage === 'cc' && bcUnit() === u && (PS.bc || {}).m === ym) render();
     }, function () { if ((cache.rev || 0) === rev) { cache.loading = false; cache.failed = true; } });
   }
@@ -12164,23 +12244,32 @@ if (typeof module !== 'undefined') module.exports = XW;
       Object.keys(ct).forEach(function (dd) { var v = ct[dd]; if (!Array.isArray(v)) return; if (+v[2]) { p.sum.late++; p.sum.lateMin += +v[2]; } if (+v[3]) { p.sum.early++; p.sum.earlyMin += +v[3]; } });
     }
   }
-  function wfCongOf(p, tam, sourceMode) {
+  function wfCongOf(p, tam, sourceMode, u, ym) {
     var S0 = p.sum, ng = {}, ct = {}, suaTay = {};
     Object.keys(p.days).forEach(function (dd) {
       var c = p.days[dd]; if (c.src === 'out') return; ng[dd] = c.k || ''; if (c.manual) suaTay[dd] = 1;
       if (c.tin || c.tout || c.workHours != null || c.late || c.early || c.otRaw || c.ot || c.otWait) ct[dd] = [c.tin || '', c.tout || '', c.late || 0, c.early || 0, c.workHours != null ? bcTrunc(c.workHours, 2) : c.hours != null ? bcTrunc(c.hours, 2) : null, c.otRaw || c.ot || 0, c.ot || 0, c.otWait ? 1 : 0, c.cong == null ? null : bcTrunc(c.cong, 3), c.paid || 0, c.bh || 0, c.unpaid || 0, c.type || '', c.issue || '', !!c.lateOk, !!c.earlyOk];
     });
+    var clear = [], cleared = u && u._ccManualClear && u._ccManualClear[ym] || {};
+    Object.keys(cleared).forEach(function (key) { var i = key.indexOf('|'); if (i >= 0 && key.slice(0, i).toUpperCase() === String(p.id).toUpperCase()) clear.push(key.slice(i + 1)); });
     var r3 = function (v) { return bcTrunc(v, 3); }, source = sourceMode === 'device' || sourceMode === 'with-device' || (!sourceMode && Object.keys(p.days).some(function (dd) { return p.days[dd].src === 'tool'; })) ? 'device' : sourceMode || 'file';
-    return { tam: !!tam, source: source, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct, suaTay: suaTay, summary: S0 };
+    return { tam: !!tam, source: source, cong: r3(S0.work), phep: r3(S0.paid), le: r3(S0.hol), huong: r3(S0.salary), tc: bcTrunc(S0.otN + S0.otR + S0.otH, 2), ngay: ng, ct: ct, suaTay: suaTay, suaTayClear: clear, summary: S0 };
   }
-  function wfSendCong(u, ym, tam, slot, sourceMode, remove) {
+  function wfSendCong(u, ym, tam, slot, sourceMode, remove, onlyIds) {
     var r = bcMonth(u, ym, sourceMode), ok = {}; wfPeople(u).forEach(function (x) { ok[x.ma] = 1; });
-    var includeAll = sourceMode === 'file' || sourceMode === 'device' || sourceMode === 'with-device', list = r.ppl.filter(function (p) { return includeAll || ok[p.id]; }).map(function (p) { return { ma: p.id, du_lieu: wfCongOf(p, tam, sourceMode) }; });
+    var only = Array.isArray(onlyIds) ? onlyIds.reduce(function (o, id) { o[String(id).toUpperCase()] = 1; return o; }, {}) : null, includeAll = sourceMode === 'file' || sourceMode === 'device' || sourceMode === 'with-device', list = r.ppl.filter(function (p) { return (!only || only[String(p.id).toUpperCase()]) && (includeAll || ok[p.id]); }).map(function (p) { return { ma: p.id, du_lieu: wfCongOf(p, tam, sourceMode, u, ym) }; });
     remove = Array.isArray(remove) ? remove : [];
     if (!list.length && !remove.length) return Promise.resolve(0);
     var call = wfOn(u) ? function (p, b) { return wfCall(u, p, b); } : wfDemoOn(u) ? wfDemoGet : null; if (!call) return Promise.resolve(0);
     var body = { ym: ym, nguoi: ccUser(), list: list, slot: slot || '', source: sourceMode || '' }; if (remove.length) body.remove = remove;
-    return call('cong', body).then(function (j) { bcSavedSet(u, ym, list, false); if (!tam) { u.wf.sent = u.wf.sent || {}; u.wf.sent[ym] = (bcX(u).lock[ym] || {}).at || nowVn(); } return j.n; });
+    return call('cong', body).then(function (j) {
+      if (j && (Array.isArray(j.cham) || Array.isArray(j.cong) || Array.isArray(j.list))) bcApplySyncResponse(u, ym, j);
+      else bcSavedSet(u, ym, list, false);
+      var cleared = u._ccManualClear && u._ccManualClear[ym]; if (cleared) { list.forEach(function (x) { var id = String(x.ma).toUpperCase(); Object.keys(cleared).forEach(function (key) { if (key.indexOf(id + '|') === 0) delete cleared[key]; }); }); if (!Object.keys(cleared).length) delete u._ccManualClear[ym]; }
+      if (!tam) { u.wf.sent = u.wf.sent || {}; u.wf.sent[ym] = (bcX(u).lock[ym] || {}).at || nowVn(); }
+      if (curPage === 'cc' && bcUnit() === u && (PS.bc || {}).m === ym && !document.querySelector('.modal-bg')) render();
+      return j.n;
+    });
   }
   function wfPushPin(u, id, pin, e) {
     if (!wfOn(u)) return; e = e || nvIndex(u)[id] || {};
@@ -12356,7 +12445,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       .then(function (j) { res.nv = j.them + j.sua; w.noPin = j.chua_pin || []; return wfCall(u, 'cham?tu=' + from + '&den=' + today); })
       .then(function (j) {
         var nvM = wfMineIdx(u), by = {}, incoming = Array.isArray(j.list) ? j.list : []; incoming.forEach(function (x) { if (!nvM[String(x.ma).toUpperCase()]) return; var k = wfIso(x.t).slice(0, 7); (by[k] = by[k] || []).push(x); }); // 17/11: máy chủ dùng chung nhiều công ty – chỉ lấy lượt chấm của nhân viên công ty này
-        w.punches = w.punches || {}; [from.slice(0, 7), ymNow].forEach(function (k) { w.punches[k] = wfMergePunches(w.punches[k], by[k]); }); res.cham = incoming.length;
+        [from.slice(0, 7), ymNow].forEach(function (k) { wfSetPunchRows(u, k, by[k] || []); }); res.cham = incoming.length;
         return wfCall(u, 'don?tu=' + ccAdd(today, -62));
       })
       .then(function (j) {
@@ -12382,7 +12471,7 @@ if (typeof module !== 'undefined') module.exports = XW;
       .then(function () { var X = bcX(u); return Promise.all(Object.keys(w.sent || {}).filter(function (ym) { return X.lock[ym]; }).map(function (ym) { return wfCall(u, 'cong-xac-nhan?ym=' + ym).then(function (j) { w.cong = w.cong || {}; var o = w.cong[ym] || (w.cong[ym] = {}); (Array.isArray(j.list) ? j.list : []).forEach(function (x) { o[x.ma] = { xn: x.xn, at: x.xn_at, ph: x.phan_hoi }; }); }); })); })
       .then(function () { return typeof lcAppSync === 'function' ? lcAppSync(u, function (p, b) { return wfCall(u, p, b); }).then(function (r) { if (r) { res.lich = r.lich; res.dk = r.dk; } }) : null; })
       .then(function () { return wfCall(u, 'bao-sai').then(function (j) { res.bs = wfBsSet(u, j.list); }, function () { }); })
-      .then(function () { return xmPull(u, function (p, b) { return wfCall(u, p, b); }, 'xin-muon?tu=' + from).then(function (n) { res.xm = n; }, function () { }); }) // 16/11
+      .then(function () { return xmPull(u, function (p, b) { return wfCall(u, p, b); }, 'xin-muon?tu=' + from).then(function (n) { u.data = u.data || {}; u.data.XIN_MUON = (u.wf.xm || []).map(function (x) { return Object.assign({}, x); }); res.xm = n; }, function () { }); }) // 16/11
       .then(function () { return typeof vbAppSync === 'function' ? vbAppSync(u) : null; }) // 16/11: kho thông tin chung
       .then(function () { return typeof bcdAppSync === 'function' ? bcdAppSync(u) : null; }) // 16/11 13:29: gửi báo cáo định kỳ (ảnh chụp số liệu)
       .then(function () { return typeof hsAppSync === 'function' ? hsAppSync(u, function (p, b) { return wfCall(u, p, b); }, true).then(function (r) { if (r) { res.hs = r.hs; res.file = r.file; } }, function () { }) : null; })

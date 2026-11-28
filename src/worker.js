@@ -669,22 +669,26 @@ async function ccPersistApprovedDay(db, cfg, ma, iso, demo) {
   const leaves = (await db.prepare("SELECT loai, tu, den, ly_do FROM don WHERE ma = ? AND trang_thai = 'Đã duyệt' AND tu <= ? AND den >= ?").bind(ma, iso, iso).all()).results.filter(x => x.loai !== WEEKEND_DUTY_TYPE);
   const fullTrip = leaves.some(x => /đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || '')) || reqs.some(x => ['di_cong_tac', 'cong_tac', 'di_cong', 'cong'].includes(x.kieu));
   const halfTrips = reqs.filter(x => x.kieu === 'cong_sang' || x.kieu === 'cong_chieu').length;
+  const halfSang = reqs.some(x => x.kieu === 'cong_sang'), halfChieu = reqs.some(x => x.kieu === 'cong_chieu'), halfMid = 780, punchOtherHalf = both && ((halfSang && !halfChieu && (ti >= halfMid || to > halfMid)) || (halfChieu && !halfSang && (ti < halfMid || to <= halfMid)));
+  const fullHalf = fullTrip || halfTrips >= 2 || punchOtherHalf;
   const halfLeave = leaves.find(x => /nửa ngày/i.test(x.loai || ''));
   const fullLeave = leaves.find(x => !/đi công tác/i.test(x.loai || '') && !/nửa ngày/i.test(x.loai || ''));
-  let late = both && shiftIn !== null ? Math.max(0, ti - shiftIn) : 0, early = both && shiftOut !== null ? Math.max(0, shiftOut - to) : 0, approved = 0;
-  if (both) for (const x of reqs) if (x.kieu === 'muon' || x.kieu === 'som') { const actual = x.kieu === 'muon' ? late : early; approved += Math.min(actual, x.phut == null ? actual : Math.max(0, +x.phut || 0)); }
+  const activeIn = halfSang && !halfChieu ? (punchOtherHalf ? halfMid : null) : halfChieu && !halfSang ? (punchOtherHalf ? shiftIn : null) : halfTrips ? null : shiftIn, activeOut = halfChieu && !halfSang ? (punchOtherHalf ? halfMid : null) : halfSang && !halfChieu ? (punchOtherHalf ? shiftOut : null) : halfTrips ? null : shiftOut;
+  let late = both && activeIn !== null ? Math.max(0, ti - activeIn) : 0, early = both && activeOut !== null ? Math.max(0, activeOut - to) : 0, approved = 0;
+  if (sundayDuty) { late = 0; early = 0; }
+  if (both) for (const x of reqs) if (x.kieu === 'muon' || x.kieu === 'som') { const actual = x.kieu === 'muon' ? late : early, allowed = x.phut == null ? actual : Math.max(0, +x.phut || 0); approved += Math.min(actual, allowed); if (x.kieu === 'muon') late = Math.max(0, late - allowed); else early = Math.max(0, early - allowed); }
   let raw = both ? (sundayDuty ? Math.max(0, to - ti) : Math.max(0, to - ti - Math.max(0, Math.min(to, 780) - Math.max(ti, 720)))) : 0, minutes = Math.max(0, raw + approved); minutes = sundayDuty ? Math.min(480, minutes >= 475 ? 480 : minutes) : minutes >= 475 ? 480 : minutes;
   let ng = data.ngay || (data.ngay = {}), ct = data.ct || (data.ct = {}), old = Array.isArray(ct[dd]) ? ct[dd].slice() : [], cell = old.slice(); while (cell.length < 16) cell.push(null);
   const oldType = cell[12] || '', oldWork = oldType === 'work' ? (+cell[8] || 0) : 0, oldPaid = oldType === 'paid' ? (+cell[9] || 0) : 0, oldHol = oldType === 'hol' ? (+cell[9] || 0) : 0, oldBh = oldType === 'bh' ? (+cell[10] || 0) : 0, oldUnpaid = oldType === 'unpaid' ? (+cell[11] || 0) : 0, oldHours = +cell[4] || 0, oldOt = cell[6] == null ? (+cell[5] || 0) : (+cell[6] || 0), oldOtRaw = +cell[5] || 0, oldOtWait = !!cell[7];
   let code = '', type = 'work', worked = 0, ratio = 0, paid = 0, bh = 0, unpaid = 0;
   if (fullTrip || halfTrips) {
-    const full = fullTrip || halfTrips >= 2 || both; worked = full ? 480 : 240; code = fullTrip ? 'CT' : sundayDuty ? full ? 'X' : 'X/2' : full ? 'CT' : 'X/2'; ratio = worked / 480;
+    const full = fullHalf; worked = full ? 480 : 240; code = fullTrip ? 'CT' : sundayDuty ? full ? 'X' : 'X/2' : full ? 'CT' : 'X/2'; ratio = worked / 480;
   } else if (fullLeave) {
     const text = String(fullLeave.loai || ''); code = /thai/i.test(text) ? 'TS' : /ốm|bệnh/i.test(text) ? 'Ô' : /không lương/i.test(text) ? 'KL' : /việc riêng|kết hôn|cưới|tang|hiếu|hỷ/i.test(text) ? 'R' : 'PN';
-    type = code === 'PN' || code === 'R' ? 'paid' : code === 'KL' ? 'unpaid' : 'bh'; paid = type === 'paid' ? 1 : 0; bh = type === 'bh' ? 1 : 0; unpaid = type === 'unpaid' ? 1 : 0;
+    type = code === 'PN' || code === 'R' ? 'paid' : code === 'KL' ? 'unpaid' : 'bh'; worked = type === 'unpaid' ? 0 : 480; ratio = type === 'unpaid' ? 0 : 1; paid = type === 'paid' ? 1 : 0; bh = type === 'bh' ? 1 : 0; unpaid = type === 'unpaid' ? 1 : 0;
   } else if (halfLeave) {
     const buoi = requestText(halfLeave.ly_do).buoi === 'chieu' ? 'chieu' : 'sang', from = hm2min(base.vao) == null ? 480 : hm2min(base.vao), toShift = hm2min(base.ra) == null ? 1020 : hm2min(base.ra) + (hm2min(base.ra) <= from ? 1440 : 0), a = buoi === 'sang' ? Math.max(from, 780) : from, b = buoi === 'sang' ? toShift : Math.min(toShift, 720), workFrom = ti == null ? 0 : Math.max(ti, a), workTo = to == null ? 0 : Math.min(to, b);
-    worked = both ? Math.min(240, Math.max(0, workTo - workFrom - Math.max(0, Math.min(workTo, 780) - Math.max(workFrom, 720)))) : 0; code = 'X/2'; ratio = worked / 480; type = 'work'; paid = 0.5;
+    const workedHalf = both ? Math.min(240, Math.max(0, workTo - workFrom - Math.max(0, Math.min(workTo, 780) - Math.max(workFrom, 720)))) : 0; worked = 240 + workedHalf; code = 'X/2'; ratio = worked / 480; type = 'work'; paid = 0.5;
   } else if (compSaturday && !punches.length && !fullLeave && !halfLeave && !oldHol && String(ng[dd] || '').toUpperCase() !== 'L') {
     code = ''; type = 'off';
   } else if (sundayDuty && oldType !== 'hol' && String(ng[dd] || '').toUpperCase() !== 'L') {
@@ -1065,6 +1069,20 @@ async function punchesBetween(db, from, to, ma) {
   const st = ma ? db.prepare(sql).bind(from, to, ma) : db.prepare(sql).bind(from, to);
   return (await st.all()).results;
 }
+function syncPunchRow(x) {
+  return { id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '', source: /^(zkteco|tool)$/i.test(String(x.nguoi || '')) ? 'zkteco' : '' };
+}
+async function syncMonthPunches(db, ym) {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(ym || '')); if (!m) return [];
+  const from = Date.UTC(+m[1], +m[2] - 1, 1) - VN, to = Date.UTC(+m[1], +m[2], 1) - VN;
+  return (await punchesBetween(db, from, to)).filter(x => !x.huy).map(syncPunchRow);
+}
+async function syncMonthCong(db, ym, filter) {
+  return (await db.prepare('SELECT ma, du_lieu FROM cong WHERE ym = ?').bind(ym).all()).results.filter(x => !filter || filter(x.ma)).map(x => {
+    let du_lieu = {}; try { du_lieu = JSON.parse(x.du_lieu || '{}'); } catch (e) { }
+    return { ma: x.ma, du_lieu };
+  });
+}
 async function deleteMonthPunches(db, ym, mas) {
   const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(ym || ''));
   if (!m || !Array.isArray(mas) || mas.length > 2000) return null;
@@ -1107,6 +1125,23 @@ function timesheetMerge(oldRaw, incoming) {
     const previous = old[key] && typeof old[key] === 'object' && !Array.isArray(old[key]) ? old[key] : {};
     merged[key] = Object.assign({}, previous, delta[key]);
   }
+  const clear = Array.isArray(delta.suaTayClear) ? delta.suaTayClear.map(String) : [];
+  if (merged.suaTay && typeof merged.suaTay === 'object' && !Array.isArray(merged.suaTay)) {
+    Object.keys(merged.suaTay).forEach(dd => { if (!merged.suaTay[dd]) delete merged.suaTay[dd]; });
+    clear.forEach(dd => delete merged.suaTay[dd]);
+    if (!Object.keys(merged.suaTay).length) delete merged.suaTay;
+  }
+  clear.forEach(dd => {
+    if (merged.ct && (!delta.ct || !Object.prototype.hasOwnProperty.call(delta.ct, dd))) delete merged.ct[dd];
+    if (merged.ngay && (!delta.ngay || !Object.prototype.hasOwnProperty.call(delta.ngay, dd))) delete merged.ngay[dd];
+  });
+  const oldManual = old.suaTay && typeof old.suaTay === 'object' && !Array.isArray(old.suaTay) ? old.suaTay : {}, incomingManual = delta.suaTay && typeof delta.suaTay === 'object' && !Array.isArray(delta.suaTay) ? delta.suaTay : {};
+  Object.keys(oldManual).forEach(dd => {
+    if (!oldManual[dd] || clear.includes(dd) || incomingManual[dd]) return;
+    if (old.ngay && Object.prototype.hasOwnProperty.call(old.ngay, dd)) { merged.ngay = merged.ngay || {}; merged.ngay[dd] = old.ngay[dd]; }
+    if (old.ct && Object.prototype.hasOwnProperty.call(old.ct, dd)) { merged.ct = merged.ct || {}; merged.ct[dd] = old.ct[dd]; }
+  });
+  delete merged.suaTayClear;
   return merged;
 }
 async function logReject(db, ma, ip, lyDo, req) {
@@ -1244,7 +1279,7 @@ async function api(req, env, url) {
       const tu = String(url.searchParams.get('tu') || isoVN(now - 13 * 864e5)), den = String(url.searchParams.get('den') || isoVN(now));
       if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den)) return jc({ ok: false, loi: 'tu, den dạng YYYY-MM-DD' }, 400);
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
-      return jc({ ok: true, now, list: (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '' })) });
+      return jc({ ok: true, now, list: (await punchesBetween(db, from, to)).filter(x => !x.huy).map(syncPunchRow) });
     }
     if (r === 'cham-xoa' && req.method === 'POST') {
       const mas = Array.isArray(body.ma) ? body.ma.slice(0, 2000).filter(ma => demoFind(String(ma || '').trim().toUpperCase())).map(ma => String(ma).trim().toUpperCase()) : body.ma;
@@ -1273,7 +1308,8 @@ async function api(req, env, url) {
       await ccCalcClearMonth(db, cfg, ym);
       if (body.slot && body.source === 'device' && body.slot === cfg.cc_device_tinh_due) { await setCfg(db, { cc_device_tinh_due: '', cc_device_tinh_last_slot: body.slot }); cfg.cc_device_tinh_due = ''; cfg.cc_device_tinh_last_slot = body.slot; }
       else if (body.slot && body.slot === cfg.cc_tinh_due) { await setCfg(db, { cc_tinh_due: '', cc_tinh_last_slot: body.slot }); cfg.cc_tinh_due = ''; cfg.cc_tinh_last_slot = body.slot; }
-      return jc({ ok: true, n: st.length });
+      const cham = await syncMonthPunches(db, ym), cong = await syncMonthCong(db, ym, ma => demoFind(ma));
+      return jc({ ok: true, n: st.length, list: cong, cong, cham });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
       const list = Array.isArray(body.list) ? body.list.slice(0, 200) : [], st = [], recalcWeekend = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
@@ -1484,7 +1520,7 @@ async function api(req, env, url) {
       const tu = String(url.searchParams.get('tu') || ''), den = String(url.searchParams.get('den') || '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(tu) || !/^\d{4}-\d{2}-\d{2}$/.test(den)) return jc({ ok: false, loi: 'tu, den dạng YYYY-MM-DD' }, 400);
       const from = Date.UTC(+tu.slice(0, 4), +tu.slice(5, 7) - 1, +tu.slice(8, 10)) - VN, to = Date.UTC(+den.slice(0, 4), +den.slice(5, 7) - 1, +den.slice(8, 10)) - VN + 864e5;
-      const rows = (await punchesBetween(db, from, to)).filter(x => !x.huy).map(x => ({ id: x.id, ma: x.ma, t: x.t, loai: x.loai, cach: x.cach, ghi: x.ghi || '', source: /^(zkteco|tool)$/i.test(String(x.nguoi || '')) ? 'zkteco' : '' }));
+      const rows = (await punchesBetween(db, from, to)).filter(x => !x.huy).map(syncPunchRow);
       return jc({ ok: true, list: rows });
     }
     if (r === 'cham-xoa' && req.method === 'POST') {
@@ -1518,7 +1554,8 @@ async function api(req, env, url) {
       if (st.length) await db.batch(st);
       await ccCalcQueue(db, cfg, months);
       if (bao.length) later(req, Promise.all(bao.map(b => requestNotice(db, cfg, url.origin, false, [b.ma], b.t, b.b, b.so, req, now))));
-      return jc({ ok: true, n: st.length });
+      const cham = await syncMonthPunches(db, ym), cong = await syncMonthCong(db, ym);
+      return jc({ ok: true, n: st.length, list: cong, cong, cham });
     }
     if (r === 'don-cap-nhat' && req.method === 'POST') {
       const list = Array.isArray(body.list) ? body.list.slice(0, 1000) : [], st = [], notices = [], recalcWeekend = [], months = new Set(), mark = (a, b) => ccReqMonths(a, b).forEach(m => months.add(m));
